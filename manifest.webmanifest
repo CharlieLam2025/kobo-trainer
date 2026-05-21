@@ -1,0 +1,21 @@
+{
+  "name": "口播练习器",
+  "short_name": "口播练习",
+  "description": "短视频口播练习 · 4 种模式 + AI 选题 + 框架库",
+  "lang": "zh-CN",
+  "dir": "ltr",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "display_override": ["standalone", "fullscreen"],
+  "orientation": "portrait",
+  "theme_color": "#A30236",
+  "background_color": "#FAFAF9",
+  "categories": ["productivity", "education", "lifestyle"],
+  "icons": [
+    { "src": "icons/icon-192.png",          "type": "image/png", "sizes": "192x192", "purpose": "any" },
+    { "src": "icons/icon-512.png",          "type": "image/png", "sizes": "512x512", "purpose": "any" },
+    { "src": "icons/icon-192-maskable.png", "type": "image/png", "sizes": "192x192", "purpose": "maskable" },
+    { "src": "icons/icon-512-maskable.png", "type": "image/png", "sizes": "512x512", "purpose": "maskable" }
+  ]
+}
