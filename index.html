@@ -15,6 +15,14 @@
 <meta name="description" content="短视频口播练习器 · 即兴 / 提词器 / 主持人 / 教程四种模式 · 含 AI 选题与 100+ 万赞文案模板">
 <link rel="icon" type="image/png" sizes="32x32" href="icons/favicon.png">
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<!-- iOS 启动闪屏：覆盖主流 iPhone 分辨率（点开图标后 1-2 秒看到的画面，避免白屏） -->
+<link rel="apple-touch-startup-image" media="(device-width: 430px) and (device-height: 932px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)" href="ios-splash/iphone-16-pro-max.png">
+<link rel="apple-touch-startup-image" media="(device-width: 393px) and (device-height: 852px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)" href="ios-splash/iphone-16-pro.png">
+<link rel="apple-touch-startup-image" media="(device-width: 428px) and (device-height: 926px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)" href="ios-splash/iphone-15-plus.png">
+<link rel="apple-touch-startup-image" media="(device-width: 390px) and (device-height: 844px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)" href="ios-splash/iphone-15.png">
+<link rel="apple-touch-startup-image" media="(device-width: 375px) and (device-height: 812px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)" href="ios-splash/iphone-xs.png">
+<link rel="apple-touch-startup-image" media="(device-width: 414px) and (device-height: 896px) and (-webkit-device-pixel-ratio: 2) and (orientation: portrait)" href="ios-splash/iphone-xr.png">
+<link rel="apple-touch-startup-image" media="(device-width: 375px) and (device-height: 667px) and (-webkit-device-pixel-ratio: 2) and (orientation: portrait)" href="ios-splash/iphone-8.png">
 <script src="https://cdn.tailwindcss.com"></script>
 <script>
   /* RANEPA palette remapped onto Tailwind's amber/stone scales so the entire
@@ -126,6 +134,27 @@
     font-family: "Yandex Sans Text","PingFang SC","Microsoft YaHei",system-ui,sans-serif;
     font-feature-settings: "ss01","ss02";
     -webkit-font-smoothing: antialiased;
+    /* iOS 原生感：禁用整体下拉刷新 + 自动文字缩放 */
+    overscroll-behavior-y: contain;
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
+  }
+  /* iOS 原生感细节：禁用文本长按弹出 / 点击高亮 / 误触双击缩放，但保持 input/textarea 可选 */
+  body {
+    -webkit-touch-callout: none;
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
+  }
+  input, textarea, [contenteditable] {
+    -webkit-user-select: text;
+    user-select: text;
+    -webkit-touch-callout: default;
+  }
+  /* 平滑惯性滚动 */
+  main, [class*="overflow-y-auto"], [class*="overflow-auto"] {
+    -webkit-overflow-scrolling: touch;
   }
 
   /* a faint paper grid behind everything — institutional feel */

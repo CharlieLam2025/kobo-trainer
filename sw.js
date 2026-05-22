@@ -1,6 +1,6 @@
 // 口播练习器 service worker
 // 策略：app shell + 字体走 cache-first；CDN 资源走 stale-while-revalidate；其它走 network-first。
-const CACHE = 'kobo-trainer-v1';
+const CACHE = 'kobo-trainer-v2';
 const APP_SHELL = [
   './',
   './index.html',
