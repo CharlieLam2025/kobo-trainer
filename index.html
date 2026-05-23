@@ -6916,6 +6916,25 @@ const ENDLESS_INTERVALS = [
   { value: 120, label: '2min', desc: '完整短视频' },
 ];
 
+// 训练课程预设：把"总时长 + 每题时长 + 题源"打包成一套训练
+const SESSION_PRESETS = [
+  { id: 'warmup',   emoji: '🌅', name: '早间预热', sessionMin: 5,   intervalSec: 30, source: '日常观点', desc: '6 题 × 30s · 轻松开嗓' },
+  { id: 'quick',    emoji: '⚡', name: '短闪训练', sessionMin: 10,  intervalSec: 60, source: '__all__',  desc: '10 题 × 60s · 全类别混合' },
+  { id: 'standard', emoji: '💪', name: '标准集训', sessionMin: 20,  intervalSec: 60, source: '__all__',  desc: '20 题 × 60s · 日常主力' },
+  { id: 'intense',  emoji: '🔥', name: '高强度',   sessionMin: 30,  intervalSec: 60, source: '即兴反驳', desc: '30 题 × 60s · 反驳拉极限' },
+  { id: 'storypol', emoji: '🎭', name: '观点专场', sessionMin: 20,  intervalSec: 90, source: '观点表达', desc: '13 题 × 90s · 练立场表达' },
+  { id: 'wild',     emoji: '🧠', name: '脑洞场',   sessionMin: 15,  intervalSec: 60, source: '脑洞',     desc: '15 题 × 60s · 想象力训练' },
+  { id: 'marathon', emoji: '🏃', name: '马拉松',   sessionMin: 60,  intervalSec: 60, source: '__all__',  desc: '60 题 · 60 分钟持续输出' },
+];
+const SESSION_TIME_PRESETS = [
+  { value: 0,  label: '不限',  desc: '手动结束' },
+  { value: 5,  label: '5 min', desc: '快速训练' },
+  { value: 10, label: '10 min',desc: '短闪' },
+  { value: 20, label: '20 min',desc: '标准集训' },
+  { value: 30, label: '30 min',desc: '高强度' },
+  { value: 60, label: '60 min',desc: '马拉松' },
+];
+
 const EndlessMode = () => {
   const [stage, setStage] = useState('config'); // config | ready | running | done
   const [intervalSec, setIntervalSec] = useState(60);
@@ -6925,7 +6944,12 @@ const EndlessMode = () => {
   const [topic, setTopic] = useState('');
   const [topicTimeLeft, setTopicTimeLeft] = useState(0);
   const [topicsHistory, setTopicsHistory] = useState([]);
+  const [skipCount, setSkipCount] = useState(0);
   const [sessionDuration, setSessionDuration] = useState(0);
+  const [sessionLimitMin, setSessionLimitMin] = useState(20); // 总训练时长（分钟，0=不限）
+  const [customSessionMin, setCustomSessionMin] = useState(20);
+  const [useCustomSession, setUseCustomSession] = useState(false);
+  const [activePresetId, setActivePresetId] = useState(null);
   const [preCount, setPreCount] = useState(3);
   const [aiTheme, setAiTheme] = useState('');
   const [aiPool, setAiPool] = useState([]);
@@ -6936,6 +6960,27 @@ const EndlessMode = () => {
   const rec = useRecorder();
 
   const effectiveInterval = useCustom ? Math.max(5, parseInt(customInterval) || 60) : intervalSec;
+  const effectiveSessionLimitSec = useCustomSession
+    ? Math.max(1, parseInt(customSessionMin) || 0) * 60
+    : sessionLimitMin * 60;
+  // 估算这次能练多少题（用于预览）
+  const estimatedTopicCount = effectiveSessionLimitSec > 0
+    ? Math.max(1, Math.floor(effectiveSessionLimitSec / effectiveInterval))
+    : null;
+
+  // 应用预设
+  const applyPreset = useCallback((p) => {
+    if (p.id === 'custom') {
+      setActivePresetId('custom');
+      return;
+    }
+    setActivePresetId(p.id);
+    setUseCustom(false);
+    setIntervalSec(p.intervalSec);
+    setUseCustomSession(false);
+    setSessionLimitMin(p.sessionMin);
+    if (p.source) setSource(p.source);
+  }, []);
 
   const allSources = useMemo(() => {
     const r = {};
@@ -6982,6 +7027,7 @@ const EndlessMode = () => {
     setStage('ready');
     setTopicsHistory([]);
     setSessionDuration(0);
+    setSkipCount(0);
     let n = 3;
     setPreCount(n);
     const timer = window.setInterval(() => {
@@ -6999,8 +7045,9 @@ const EndlessMode = () => {
     }, 1000);
   };
 
-  // 手动切题 / 自动切题共用的逻辑
+  // 手动切题（用户跳过）
   const rotateTopic = useCallback(() => {
+    setSkipCount(c => c + 1);
     setTopicsHistory(prevHist => {
       const next = pickFromPool(prevHist);
       setTopic(next);
@@ -7009,14 +7056,20 @@ const EndlessMode = () => {
     setTopicTimeLeft(effectiveInterval);
   }, [pickFromPool, sessionDuration, effectiveInterval]);
 
-  // Master tick: session timer + topic countdown + auto-rotate
+  // Master tick: session timer + topic countdown + auto-rotate + 自动结束
   useEffect(() => {
     if (stage !== 'running') return;
     const id = window.setInterval(() => {
-      setSessionDuration(d => d + 1);
+      setSessionDuration(d => {
+        const next = d + 1;
+        // 总时长到了 → 自动结束（异步避免在 setState 里直接调用 setState）
+        if (effectiveSessionLimitSec > 0 && next >= effectiveSessionLimitSec) {
+          setTimeout(() => finish(), 0);
+        }
+        return next;
+      });
       setTopicTimeLeft(t => {
         if (t <= 1) {
-          // rotate — pick next based on the latest history
           setTopicsHistory(prevHist => {
             const next = pickFromPool(prevHist);
             setTopic(next);
@@ -7028,7 +7081,8 @@ const EndlessMode = () => {
       });
     }, 1000);
     return () => window.clearInterval(id);
-  }, [stage, effectiveInterval, pickFromPool, sessionDuration]);
+    // eslint-disable-next-line
+  }, [stage, effectiveInterval, pickFromPool, sessionDuration, effectiveSessionLimitSec]);
 
   const finish = () => {
     rec.stop();
@@ -7048,27 +7102,51 @@ const EndlessMode = () => {
   if (stage === 'running') {
     const pct = (topicTimeLeft / effectiveInterval) * 100;
     const urgent = topicTimeLeft <= 5;
+    // 总时长进度
+    const sessionPct = effectiveSessionLimitSec > 0
+      ? Math.min(100, (sessionDuration / effectiveSessionLimitSec) * 100)
+      : 0;
+    const sessionRemain = effectiveSessionLimitSec > 0
+      ? Math.max(0, effectiveSessionLimitSec - sessionDuration)
+      : 0;
+    // 是否最后一题（剩余时长 ≤ 当前题时长 + 5s 余量）
+    const isLastTopic = effectiveSessionLimitSec > 0
+      && sessionRemain <= effectiveInterval + 5
+      && sessionRemain > 0;
     return (
       <div className="absolute inset-0 z-[70] bg-stone-950" style={{borderRadius:0}}>
         <CameraFrame videoRef={cam.videoRef} className="w-full h-full"
           overlay={
             <>
-              {/* Top progress bar across full width */}
-              <div className="absolute top-0 left-0 right-0 h-1 bg-stone-900/40">
-                <div className="h-full bg-[#A30236] transition-all duration-1000 ease-linear" style={{ width: `${pct}%` }} />
+              {/* 顶部双条进度：上=本题（深红）下=总训练（琥珀）*/}
+              <div className="absolute top-0 left-0 right-0">
+                <div className="h-1 bg-stone-900/40">
+                  <div className="h-full bg-[#A30236] transition-all duration-1000 ease-linear" style={{ width: `${pct}%` }} />
+                </div>
+                {effectiveSessionLimitSec > 0 && (
+                  <div className="h-0.5 bg-stone-900/40">
+                    <div className="h-full bg-[#F1A23F] transition-all duration-1000 ease-linear" style={{ width: `${sessionPct}%` }} />
+                  </div>
+                )}
               </div>
-              {/* Top: current topic + per-topic countdown */}
-              <div className="absolute left-3 right-3" style={{top:'calc(env(safe-area-inset-top, 0px) + 16px)'}}>
+              {/* Top: current topic + per-topic countdown + 训练总时长 */}
+              <div className="absolute left-3 right-3" style={{top:'calc(env(safe-area-inset-top, 0px) + 18px)'}}>
                 <div className="bg-stone-950/85 backdrop-blur text-stone-100 px-4 py-3 border-l-[3px] border-[#A30236]" style={{borderRadius: '3px'}}>
                   <div className="flex items-baseline justify-between gap-2 mb-1.5">
                     <span style={{color: '#F1A23F', fontSize: '9px', letterSpacing: '0.18em', fontWeight: 700, textTransform: 'uppercase'}}>
-                      第 {topicsHistory.length} 题
+                      {isLastTopic ? '最后一题' : `第 ${topicsHistory.length} 题`}
+                      {effectiveSessionLimitSec > 0 && estimatedTopicCount && ` / 共约 ${estimatedTopicCount} 题`}
                     </span>
-                    <span className={`font-display font-bold tabular-nums text-2xl ${urgent ? 'text-red-300 pulse-rec' : 'text-amber-300'}`}>
+                    <span className={`font-display font-bold tabular-nums text-2xl ${urgent ? 'text-red-300 pulse-rec' : (isLastTopic ? 'text-amber-300 pulse-rec' : 'text-amber-300')}`}>
                       {topicTimeLeft}s
                     </span>
                   </div>
                   <div className="font-display font-bold text-lg leading-snug">{topic}</div>
+                  {effectiveSessionLimitSec > 0 && (
+                    <div className="text-[10px] text-stone-400 mt-2 tabular-nums tracking-wider">
+                      训练已用 {formatTime(sessionDuration)} / 共 {formatTime(effectiveSessionLimitSec)} · 还剩 {formatTime(sessionRemain)}
+                    </div>
+                  )}
                 </div>
               </div>
               {/* Bottom: REC + 美颜 + 跳过 + stop */}
@@ -7080,13 +7158,15 @@ const EndlessMode = () => {
                   <BeautyButton cam={cam} />
                 </div>
                 <div className="flex items-center gap-1.5">
-                  <button onClick={rotateTopic}
-                    className="flex items-center gap-1.5 bg-stone-950/80 backdrop-blur text-white px-2.5 py-1.5 text-[11px] tracking-wider font-bold"
-                    style={{borderRadius:'2px'}}
-                    title="跳过这一题，立刻切到下一题"
-                  >
-                    <Icon name="refresh" size={13} />跳过
-                  </button>
+                  {!isLastTopic && (
+                    <button onClick={rotateTopic}
+                      className="flex items-center gap-1.5 bg-stone-950/80 backdrop-blur text-white px-2.5 py-1.5 text-[11px] tracking-wider font-bold"
+                      style={{borderRadius:'2px'}}
+                      title="跳过这一题，立刻切到下一题"
+                    >
+                      <Icon name="refresh" size={13} />跳过
+                    </button>
+                  )}
                   <Btn variant="danger" size="sm" onClick={finish}>结束</Btn>
                 </div>
               </div>
@@ -7098,38 +7178,184 @@ const EndlessMode = () => {
   }
 
   if (stage === 'done') {
-    const transcript = topicsHistory.length > 0 ? (
-      <Card className="p-4 mt-3">
-        <div className="text-xs text-stone-500 font-medium mb-2 tracking-wider">
-          本次涵盖了 {topicsHistory.length} 个题
-        </div>
-        <div className="space-y-1.5 max-h-72 overflow-y-auto text-sm">
-          {topicsHistory.map((h, i) => (
-            <div key={i} className="flex items-baseline gap-2 text-stone-700">
-              <span className="text-stone-400 tabular-nums text-xs shrink-0 w-5">{String(i + 1).padStart(2, '0')}</span>
-              <span className="text-stone-400 tabular-nums text-xs shrink-0">{formatTime(h.at)}</span>
-              <span className="flex-1">{h.topic}</span>
+    const totalTopics = topicsHistory.length;
+    const avgPerTopic = totalTopics > 0 ? Math.round(sessionDuration / totalTopics) : 0;
+    const goalPct = effectiveSessionLimitSec > 0
+      ? Math.min(100, Math.round((sessionDuration / effectiveSessionLimitSec) * 100))
+      : null;
+    const isPresetMatched = SESSION_PRESETS.find(p => p.id === activePresetId);
+
+    const trainingReport = (
+      <>
+        {/* 训练报告 */}
+        <Card className="p-5 mt-3">
+          <div className="flex items-center gap-2 mb-4">
+            <div className="w-7 h-7 bg-[#FBEFF2] text-[#A30236] flex items-center justify-center" style={{borderRadius:'3px'}}>
+              <Icon name="target" size={14} strokeWidth={1.7}/>
             </div>
-          ))}
-        </div>
-      </Card>
-    ) : null;
+            <h4 className="font-display font-bold text-[16px] text-stone-900 m-0">训练报告</h4>
+            {isPresetMatched && <Tag color="amber">{isPresetMatched.emoji} {isPresetMatched.name}</Tag>}
+          </div>
+          <div className="grid grid-cols-2 gap-3 mb-4">
+            <div className="border border-stone-200 p-3" style={{borderRadius:'3px'}}>
+              <div className="font-display font-bold text-[#A30236] text-2xl tabular-nums leading-none">{totalTopics}</div>
+              <div className="text-[10px] tracking-[0.16em] uppercase text-stone-500 mt-1 font-semibold">题数</div>
+            </div>
+            <div className="border border-stone-200 p-3" style={{borderRadius:'3px'}}>
+              <div className="font-display font-bold text-stone-900 text-2xl tabular-nums leading-none">{formatTime(sessionDuration)}</div>
+              <div className="text-[10px] tracking-[0.16em] uppercase text-stone-500 mt-1 font-semibold">总时长</div>
+            </div>
+            <div className="border border-stone-200 p-3" style={{borderRadius:'3px'}}>
+              <div className="font-display font-bold text-stone-900 text-2xl tabular-nums leading-none">{avgPerTopic}s</div>
+              <div className="text-[10px] tracking-[0.16em] uppercase text-stone-500 mt-1 font-semibold">平均每题</div>
+            </div>
+            <div className="border border-stone-200 p-3" style={{borderRadius:'3px'}}>
+              <div className={`font-display font-bold text-2xl tabular-nums leading-none ${skipCount > 3 ? 'text-amber-600' : 'text-stone-900'}`}>{skipCount}</div>
+              <div className="text-[10px] tracking-[0.16em] uppercase text-stone-500 mt-1 font-semibold">跳过次数</div>
+            </div>
+          </div>
+          {goalPct !== null && (
+            <div className="mb-3">
+              <div className="flex justify-between text-[11px] text-stone-600 mb-1">
+                <span>目标完成度</span>
+                <span className="font-bold">{goalPct}%</span>
+              </div>
+              <div className="h-2 bg-stone-200 overflow-hidden" style={{borderRadius:'2px'}}>
+                <div className={`h-full ${goalPct >= 95 ? 'bg-emerald-500' : goalPct >= 50 ? 'bg-[#A30236]' : 'bg-amber-500'}`} style={{width:`${goalPct}%`}}/>
+              </div>
+            </div>
+          )}
+          {/* 一句话点评 */}
+          <div className="bg-stone-50 px-3 py-2 text-[12px] text-stone-700 leading-relaxed" style={{borderRadius:'2px'}}>
+            {goalPct !== null && goalPct >= 95 ? (
+              <>✓ <span className="font-bold text-emerald-700">完成训练目标</span> · 共练 {totalTopics} 题 · 平均每题 {avgPerTopic}s</>
+            ) : skipCount > totalTopics / 3 ? (
+              <>⚠ 跳过太多（{skipCount}/{totalTopics}）· 下次试着"硬着头皮讲"，逃避是杀手</>
+            ) : (
+              <>👏 这次练了 <span className="font-bold text-[#A30236]">{totalTopics}</span> 题 · 用 {formatTime(sessionDuration)} · 平均节奏 {avgPerTopic}s/题</>
+            )}
+          </div>
+        </Card>
+
+        {/* 题目流水 */}
+        {totalTopics > 0 && (
+          <Card className="p-4 mt-3">
+            <div className="text-xs text-stone-500 font-medium mb-2 tracking-wider">
+              题目流水（{totalTopics} 题）
+            </div>
+            <div className="space-y-1.5 max-h-72 overflow-y-auto text-sm">
+              {topicsHistory.map((h, i) => (
+                <div key={i} className="flex items-baseline gap-2 text-stone-700">
+                  <span className="text-stone-400 tabular-nums text-xs shrink-0 w-5">{String(i + 1).padStart(2, '0')}</span>
+                  <span className="text-stone-400 tabular-nums text-xs shrink-0">{formatTime(h.at)}</span>
+                  <span className="flex-1">{h.topic}</span>
+                </div>
+              ))}
+            </div>
+          </Card>
+        )}
+      </>
+    );
     return <DoneView
       blob={rec.blob}
-      contextLabel={`无限模式 · ${topicsHistory.length} 题 · ${formatTime(sessionDuration)}`}
+      contextLabel={`无限模式 · ${totalTopics} 题 · ${formatTime(sessionDuration)}`}
       duration={sessionDuration}
       onRetry={begin}
       onNew={resetAll}
-      extra={transcript}
+      extra={trainingReport}
     />;
   }
 
   // config stage
   return (
     <div className="space-y-4 fade-in">
+      {/* 训练计划库 —— 一键应用预设 */}
+      <Card className="p-5">
+        <div className="flex items-center gap-2 mb-3">
+          <span className="stat-num" style={{ fontSize: '18px' }}>·</span>
+          <span className="rule-crimson" />
+          <span className="eyebrow eyebrow--crimson">训练计划</span>
+        </div>
+        <h3 className="font-display font-bold text-lg mb-2 text-stone-900">选一套预设 · 一键开练</h3>
+        <p className="text-[11px] text-stone-500 mb-3 leading-relaxed">
+          预设会自动填好 总时长 / 每题时长 / 题源，省去手动配置。或者下方手动调。
+        </p>
+        <div className="grid grid-cols-2 gap-2">
+          {SESSION_PRESETS.map(p => {
+            const active = activePresetId === p.id;
+            return (
+              <button key={p.id} onClick={() => applyPreset(p)}
+                className={`text-left p-3 border-2 transition-all ${
+                  active ? 'border-[#A30236] bg-[#FBEFF2]' : 'border-stone-200 hover:border-stone-300'
+                }`}
+                style={{borderRadius:'3px'}}
+              >
+                <div className="flex items-center gap-1.5 mb-1">
+                  <span className="text-base">{p.emoji}</span>
+                  <span className="font-semibold text-sm">{p.name}</span>
+                </div>
+                <div className="text-[10px] text-stone-500 leading-snug">{p.desc}</div>
+                <div className="text-[10px] text-[#A30236] mt-1 font-bold tracking-wider">{p.sessionMin} MIN · {p.intervalSec}s/题</div>
+              </button>
+            );
+          })}
+        </div>
+      </Card>
+
+      {/* 总训练时长 */}
       <Card className="p-5">
         <div className="flex items-center gap-2 mb-3">
           <span className="stat-num" style={{ fontSize: '18px' }}>01</span>
+          <span className="rule-crimson" />
+          <span className="eyebrow eyebrow--crimson">总训练时长</span>
+        </div>
+        <h3 className="font-display font-bold text-lg mb-3 text-stone-900">这次练多久</h3>
+        <div className="grid grid-cols-3 gap-2 mb-3">
+          {SESSION_TIME_PRESETS.map(d => (
+            <button key={d.value} onClick={() => { setUseCustomSession(false); setSessionLimitMin(d.value); setActivePresetId(null); }}
+              className={`text-left p-3 border-2 transition-all ${
+                !useCustomSession && sessionLimitMin === d.value ? 'border-[#A30236] bg-[#FBEFF2]' : 'border-stone-200 hover:border-stone-300'
+              }`}
+              style={{ borderRadius: '3px' }}
+            >
+              <div className="font-semibold text-sm">{d.label}</div>
+              <div className="text-[10px] text-stone-500 mt-0.5">{d.desc}</div>
+            </button>
+          ))}
+        </div>
+        <div onClick={() => { setUseCustomSession(true); setActivePresetId(null); }}
+          className={`p-3 border-2 transition-all flex items-center gap-2 flex-wrap cursor-pointer ${
+            useCustomSession ? 'border-[#A30236] bg-[#FBEFF2]' : 'border-stone-200'
+          }`}
+          style={{ borderRadius: '3px' }}
+        >
+          <Icon name="settings" size={14} />
+          <span className="font-semibold text-sm whitespace-nowrap">自定义</span>
+          <input
+            type="number" min="1" max="180" value={customSessionMin}
+            onClick={e => { e.stopPropagation(); setUseCustomSession(true); setActivePresetId(null); }}
+            onChange={e => { setUseCustomSession(true); setCustomSessionMin(e.target.value); setActivePresetId(null); }}
+            className="w-16 px-2 py-1 border border-stone-300 text-center text-sm focus:outline-none focus:border-[#A30236]"
+            style={{ borderRadius: '2px' }}
+          />
+          <span className="text-stone-500 text-sm">分钟</span>
+        </div>
+        {effectiveSessionLimitSec > 0 && estimatedTopicCount && (
+          <div className="mt-3 text-[12px] text-stone-700 bg-stone-50 px-3 py-2" style={{borderRadius:'2px'}}>
+            预计能练 <span className="font-bold text-[#A30236]">{estimatedTopicCount}</span> 题 ·
+            到时间自动停 · 进度条会显示剩余
+          </div>
+        )}
+        {effectiveSessionLimitSec === 0 && (
+          <div className="mt-3 text-[12px] text-stone-500 bg-stone-50 px-3 py-2" style={{borderRadius:'2px'}}>
+            不限时长 · 手动按"结束"才停（适合无所事事的自由训练）
+          </div>
+        )}
+      </Card>
+
+      <Card className="p-5">
+        <div className="flex items-center gap-2 mb-3">
+          <span className="stat-num" style={{ fontSize: '18px' }}>02</span>
           <span className="rule-crimson" />
           <span className="eyebrow eyebrow--crimson">每题时长</span>
         </div>
@@ -7168,7 +7394,7 @@ const EndlessMode = () => {
 
       <Card className="p-5">
         <div className="flex items-center gap-2 mb-3">
-          <span className="stat-num" style={{ fontSize: '18px' }}>02</span>
+          <span className="stat-num" style={{ fontSize: '18px' }}>03</span>
           <span className="rule-crimson" />
           <span className="eyebrow eyebrow--crimson">题目池</span>
         </div>
@@ -7248,20 +7474,22 @@ const EndlessMode = () => {
 
       <Card className="p-5">
         <div className="flex items-center gap-2 mb-3">
-          <span className="stat-num" style={{ fontSize: '18px' }}>03</span>
+          <span className="stat-num" style={{ fontSize: '18px' }}>04</span>
           <span className="rule-crimson" />
           <span className="eyebrow eyebrow--crimson">规则确认</span>
         </div>
         <ul className="text-sm text-stone-700 space-y-1.5 leading-relaxed mb-4">
-          <li className="flex items-baseline gap-2"><span className="text-[#A30236] shrink-0">▍</span>摄像头开启 · 全程一段录像</li>
+          <li className="flex items-baseline gap-2"><span className="text-[#A30236] shrink-0">▍</span>训练总时长 <span className="font-bold text-[#A30236]">{effectiveSessionLimitSec === 0 ? '不限' : `${Math.round(effectiveSessionLimitSec/60)} 分钟`}</span>{estimatedTopicCount && ` · 预计 ${estimatedTopicCount} 题`}</li>
           <li className="flex items-baseline gap-2"><span className="text-[#A30236] shrink-0">▍</span>每 <span className="font-bold text-[#A30236]">{effectiveInterval}</span> 秒自动切下一题</li>
-          <li className="flex items-baseline gap-2"><span className="text-[#A30236] shrink-0">▍</span>最近 5 题不会重复出现</li>
-          <li className="flex items-baseline gap-2"><span className="text-[#A30236] shrink-0">▍</span>按"结束"停止 · 录像自动保存</li>
+          <li className="flex items-baseline gap-2"><span className="text-[#A30236] shrink-0">▍</span>摄像头开启 · 全程一段录像</li>
+          <li className="flex items-baseline gap-2"><span className="text-[#A30236] shrink-0">▍</span>最近 5 题不会重复出现 · 跳过次数会进训练报告</li>
+          <li className="flex items-baseline gap-2"><span className="text-[#A30236] shrink-0">▍</span>到时间自动停 · 也能手动"结束"</li>
+          <li className="flex items-baseline gap-2"><span className="text-[#A30236] shrink-0">▍</span>结束后给训练报告：题数 / 平均节奏 / 跳过统计</li>
         </ul>
         <div className="flex items-center justify-end gap-2 flex-wrap">
           {cam.error && <span className="text-xs text-red-600 self-center">{cam.error}</span>}
           <Btn variant="primary" size="md" onClick={begin}>
-            <Icon name="play" size={14} />开始无限练习
+            <Icon name="play" size={14} />开始训练
           </Btn>
         </div>
       </Card>
