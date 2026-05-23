@@ -94,7 +94,11 @@
   // 预解析 ESM 模块，挂到全局；若网络/沙箱拦截则静默失败，cam 退回纯 CSS 滤镜路径
   try {
     const mod = await import('./mediapipe/vision_bundle.mjs');
-    window.__MEDIAPIPE = { FilesetResolver: mod.FilesetResolver, FaceLandmarker: mod.FaceLandmarker };
+    window.__MEDIAPIPE = {
+      FilesetResolver: mod.FilesetResolver,
+      FaceLandmarker:  mod.FaceLandmarker,
+      ImageSegmenter:  mod.ImageSegmenter,
+    };
     window.dispatchEvent(new Event('mediapipe-ready'));
   } catch (e) {
     console.warn('[MediaPipe] failed to load:', e?.message || e);
@@ -4013,6 +4017,47 @@ async function deepseekGeneratePublishKit({ apiKey, topic, mode, duration }) {
   return JSON.parse(m[0]);
 }
 
+// DeepSeek 每日激励语：根据用户当前状态生成一句话开场
+async function deepseekDailyGreeting({ apiKey, streak, totalCount, weekCount, dayOfWeek, isRestDay, todayCount, goalCount }) {
+  if (!apiKey) throw new Error('需要 API Key');
+  const sys = '你是一个温暖、有创作经验的内容创作者朋友。给用户写一句开场打招呼，口语化、不要鸡汤、不要"加油"这种空话。';
+  const usr = `用户状态：
+- 连续 ${streak} 天达成目标
+- 累计 ${totalCount} 条预演
+- 本周已录 ${weekCount} 条
+- 今天是${dayOfWeek}
+- 今天目标 ${goalCount} 条 · 已录 ${todayCount} 条
+- 今天${isRestDay ? '已声明为休息日' : '正常练习日'}
+
+要求：
+- 1 句话，30-50 字
+- 口语化，像朋友说话
+- 根据连续天数调整：
+  · 0 天：温柔欢迎，鼓励开启
+  · 1-3 天：表扬上手快
+  · 4-7 天：肯定养成习惯，提个小升级
+  · 8-30 天：当老朋友聊
+  · 30+ 天：彼此认可，谈创作
+- 如果是休息日：肯定他的节奏感
+- 如果今天目标已达成：肯定 + 给点延伸思考
+- 如果还差几条：自然 nudge
+
+仅返回这一句话，不要前缀 / 引号 / 解释。`;
+  const res = await fetch('https://api.deepseek.com/chat/completions', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+    body: JSON.stringify({
+      model: 'deepseek-chat',
+      messages: [{ role:'system', content:sys }, { role:'user', content:usr }],
+      temperature: 0.95,
+      max_tokens: 100,
+    }),
+  });
+  if (!res.ok) throw new Error('DeepSeek ' + res.status);
+  const data = await res.json();
+  return (data.choices?.[0]?.message?.content || '').trim().replace(/^["']|["']$/g, '');
+}
+
 // DeepSeek 主持人追问：根据对话历史 + 你刚说的话，生成下一个针对性问题
 async function deepseekHostFollowup({ apiKey, topic, history, lastUserSaid, kind = 'followup' }) {
   if (!apiKey) throw new Error('请先在"设置"里配置 DeepSeek API Key');
@@ -4156,18 +4201,22 @@ function useCamera() {
   const filterCSSRef     = useRef('none');
 
   const landmarkerRef    = useRef(null); // MediaPipe FaceLandmarker 实例
+  const segmenterRef     = useRef(null); // MediaPipe ImageSegmenter 实例（selfie）
+  const maskCanvasRef    = useRef(null); // 缓存的人像 mask（用于背景虚化合成）
 
   const [filterPreset, setFilterPreset] = useState('none');
   const [beautyLevel,  setBeautyLevel]  = useState(0);
-  // 真磨皮 / 大眼 / 瘦脸（0-1 浮点）
+  // 真磨皮 / 大眼 / 瘦脸 / 背景虚化（0-1 浮点）
   const [skinSmooth,   setSkinSmooth]   = useState(0);
   const [faceSlim,     setFaceSlim]     = useState(0);
   const [eyeEnlarge,   setEyeEnlarge]   = useState(0);
+  const [bgBlur,       setBgBlur]       = useState(0);
   const [faceFxReady,  setFaceFxReady]  = useState(false); // MediaPipe 是否加载就绪
   const [faceFxLoading,setFaceFxLoading]= useState(false);
   const skinRef = useRef(0); skinRef.current = skinSmooth;
   const slimRef = useRef(0); slimRef.current = faceSlim;
   const enlargeRef = useRef(0); enlargeRef.current = eyeEnlarge;
+  const bgBlurRef = useRef(0); bgBlurRef.current = bgBlur;
 
   const [active, setActive] = useState(false);
   const [error,  setError]  = useState(null);
@@ -4215,12 +4264,42 @@ function useCamera() {
     }
   }, []);
 
+  // 懒加载 ImageSegmenter：背景虚化打开时才初始化
+  const ensureSegmenter = useCallback(async () => {
+    if (segmenterRef.current) return segmenterRef.current;
+    if (!window.__MEDIAPIPE) return null;
+    setFaceFxLoading(true);
+    try {
+      const { FilesetResolver, ImageSegmenter } = window.__MEDIAPIPE;
+      const vision = await FilesetResolver.forVisionTasks(new URL('./mediapipe/', window.location.href).href);
+      const sg = await ImageSegmenter.createFromOptions(vision, {
+        baseOptions: {
+          modelAssetPath: new URL('./mediapipe/selfie_segmenter.tflite', window.location.href).href,
+          delegate: 'GPU',
+        },
+        runningMode: 'VIDEO',
+        outputCategoryMask: true,
+        outputConfidenceMasks: false,
+      });
+      segmenterRef.current = sg;
+      return sg;
+    } catch (e) {
+      console.warn('[ImageSegmenter] init failed:', e?.message || e);
+      return null;
+    } finally {
+      setFaceFxLoading(false);
+    }
+  }, []);
+
   // 任意面部 FX 强度变化 → 触发初始化
   useEffect(() => {
     if ((skinSmooth + faceSlim + eyeEnlarge) > 0) {
       ensureLandmarker();
     }
-  }, [skinSmooth, faceSlim, eyeEnlarge, ensureLandmarker]);
+    if (bgBlur > 0) {
+      ensureSegmenter();
+    }
+  }, [skinSmooth, faceSlim, eyeEnlarge, bgBlur, ensureLandmarker, ensureSegmenter]);
 
   const attachVideo = useCallback((el) => {
     videoElRef.current = el;
@@ -4267,6 +4346,8 @@ function useCamera() {
       // 限频面部检测：每 ~80ms（≈12fps）跑一次，结果缓存到下次绘制
       let lastDetectTime = 0;
       let cachedLandmarks = null;
+      // 限频人像分割：每 ~100ms 跑一次，mask 缓存在 maskCanvasRef
+      let lastSegTime = 0;
 
       const draw = () => {
         if (hv.videoWidth) {
@@ -4367,7 +4448,75 @@ function useCamera() {
             }
           }
 
-          // 第三步：套 CSS 滤镜（套到整张图上，作为最终调色）
+          // 第三步：背景虚化 —— 用 selfie 分割把人物保留清晰、背景做高斯模糊
+          const bgB = bgBlurRef.current;
+          if (bgB > 0 && segmenterRef.current) {
+            const now = performance.now();
+            // 限频跑一次 segmentation，写入 maskCanvas
+            if (now - lastSegTime > 100) {
+              try {
+                const seg = segmenterRef.current.segmentForVideo(hv, now);
+                if (seg && seg.categoryMask) {
+                  const mk = seg.categoryMask;
+                  const mw = mk.width, mh = mk.height;
+                  const arr = mk.getAsUint8Array();
+                  let mc = maskCanvasRef.current;
+                  if (!mc) { mc = document.createElement('canvas'); maskCanvasRef.current = mc; }
+                  if (mc.width !== mw)  mc.width  = mw;
+                  if (mc.height !== mh) mc.height = mh;
+                  const mctx = mc.getContext('2d');
+                  const md = mctx.createImageData(mw, mh);
+                  // selfie_segmenter（Tasks Vision）：class 0 = 背景，class 1 = 人物。
+                  // 用 arr[i] !== 0 既兼容 0/1 也兼容 0/255 的输出。
+                  for (let i = 0; i < arr.length; i++) {
+                    const isFg = arr[i] !== 0;
+                    const o = i * 4;
+                    md.data[o]     = 255;
+                    md.data[o + 1] = 255;
+                    md.data[o + 2] = 255;
+                    md.data[o + 3] = isFg ? 255 : 0;
+                  }
+                  mctx.putImageData(md, 0, 0);
+                  try { mk.close(); } catch {}
+                }
+              } catch (e) { /* swallow */ }
+              lastSegTime = now;
+            }
+
+            // 用缓存的 mask 合成：sharp 前景 + blurred 背景
+            const mc = maskCanvasRef.current;
+            if (mc && mc.width > 0) {
+              // 备份当前 canvas（带面部 FX 的清晰版）到 scratch
+              sctx.save();
+              sctx.globalCompositeOperation = 'source-over';
+              sctx.clearRect(0, 0, W, H);
+              sctx.drawImage(canvas, 0, 0);
+              sctx.restore();
+
+              // 主 canvas 改成高斯模糊版（用 scratch 当源，避免 in-place blur 兼容性问题）
+              const blurPx = 6 + bgB * 22; // 6 ~ 28 px
+              ctx.save();
+              try { ctx.filter = `blur(${blurPx}px)`; } catch {}
+              ctx.clearRect(0, 0, W, H);
+              ctx.drawImage(scratch, 0, 0);
+              try { ctx.filter = 'none'; } catch {}
+              ctx.restore();
+
+              // 把 mask 镜像后乘到 scratch 上（destination-in：只保留人物像素）
+              // hv 没镜像，但 canvas/scratch 都镜像过，所以 mask 要水平翻转再画
+              sctx.save();
+              sctx.globalCompositeOperation = 'destination-in';
+              sctx.translate(W, 0);
+              sctx.scale(-1, 1);
+              sctx.drawImage(mc, 0, 0, W, H);
+              sctx.restore();
+
+              // sharp 前景叠到模糊背景上
+              ctx.drawImage(scratch, 0, 0);
+            }
+          }
+
+          // 第四步：套 CSS 滤镜（套到整张图上，作为最终调色）
           if (filterCSSRef.current !== 'none' && filterCSSRef.current) {
             // 通过 scratch 中转避免 ctx.filter 多次应用的开销
             sctx.clearRect(0, 0, W, H);
@@ -4426,6 +4575,8 @@ function useCamera() {
     if (rafRef.current) cancelAnimationFrame(rafRef.current);
     if (streamRef.current) streamRef.current.getTracks().forEach(t => t.stop());
     if (landmarkerRef.current) { try { landmarkerRef.current.close(); } catch {} landmarkerRef.current = null; }
+    if (segmenterRef.current)  { try { segmenterRef.current.close(); }  catch {} segmenterRef.current  = null; }
+    maskCanvasRef.current = null;
   }, []);
 
   return {
@@ -4436,6 +4587,7 @@ function useCamera() {
     skinSmooth,   setSkinSmooth,
     faceSlim,     setFaceSlim,
     eyeEnlarge,   setEyeEnlarge,
+    bgBlur,       setBgBlur,
     faceFxReady,  faceFxLoading,
   };
 }
@@ -4707,6 +4859,14 @@ const FilterSheet = ({ cam, onClose }) => {
             <Slider label="大眼" value={cam.eyeEnlarge} onChange={cam.setEyeEnlarge}
               hint="双眼区域放大 · 最大 22%" />
           </div>
+
+          <div className="text-[10px] text-white/50 uppercase tracking-[0.2em] font-bold pt-2 flex items-center gap-2">
+            背景虚化（人像分割 · 自动识别人和背景）
+          </div>
+          <div className="space-y-2.5">
+            <Slider label="背景虚化" value={cam.bgBlur} onChange={cam.setBgBlur}
+              hint="保留人物清晰 · 背景高斯模糊 6 ~ 28 px" />
+          </div>
         </div>
       )}
 
@@ -4731,7 +4891,8 @@ const FilterSheet = ({ cam, onClose }) => {
 const BeautyButton = ({ cam, style = {}, className = '' }) => {
   const [open, setOpen] = useState(false);
   const on = cam.filterPreset !== 'none' || cam.beautyLevel > 0
-          || cam.skinSmooth > 0 || cam.faceSlim > 0 || cam.eyeEnlarge > 0;
+          || cam.skinSmooth > 0 || cam.faceSlim > 0 || cam.eyeEnlarge > 0
+          || cam.bgBlur > 0;
   return (
     <>
       <button onClick={() => setOpen(true)}
@@ -5455,6 +5616,68 @@ const HomeView = ({ onSelect, onOpenSettings }) => {
   const dayOfWeek = ['日','一','二','三','四','五','六'][today.getDay()];
   const [editingGoal, setEditingGoal] = useState(false);
   const [showWeeklyRecap, setShowWeeklyRecap] = useState(false);
+  const [dailyGreeting, setDailyGreeting] = useState('');
+
+  // 每日激励语（按日缓存，避免重复调 AI）
+  useEffect(() => {
+    const todayK = dayKey(Date.now());
+    // 先看缓存
+    try {
+      const cached = JSON.parse(localStorage.getItem('kobo.dailyGreeting') || '{}');
+      if (cached.date === todayK && cached.text) {
+        setDailyGreeting(cached.text);
+        return;
+      }
+    } catch {}
+    // 兜底文案池
+    const FALLBACK = [
+      '今天先来一条预演 · 别想太多，开口最重要',
+      '镜头前再讲一遍，发出去就稳了',
+      '一天一条，习惯比天赋重要',
+      '今天讲点你前几天没敢讲的吧',
+      '随便一个话题，60 秒，先来',
+      '你已经在做最重要的事 —— 持续开口',
+      '不要等准备好 · 在镜头前讲一遍就是准备',
+    ];
+    // 短时间不重复调（避免反复 mount 触发）
+    setTimeout(() => {
+      // 用当前 statsfeedback 调 AI
+      const today0 = new Date();
+      today0.setHours(0,0,0,0);
+      const todayStart = today0.getTime();
+      const goal = settings.dailyGoal || { count: 3, durationSec: 60 };
+      const minDur = (goal.durationSec || 0) * 0.8;
+      const files = settings.savedFiles || [];
+      const todayCount = files.filter(f => (f.ts||0) >= todayStart && (f.ts||0) < todayStart + 86400000 && (f.duration||0) >= minDur).length;
+      const weekStart = todayStart - 6 * 86400000;
+      const weekCount = files.filter(f => (f.ts||0) >= weekStart && (f.duration||0) >= minDur).length;
+      // 简化 streak 算法（用 sync 的话需要更多代码，这里复用）
+      const restSet = new Set(settings.restDays || []);
+      let streak = (todayCount >= goal.count || restSet.has(todayK)) ? 1 : 0;
+      let cursor = todayStart - 86400000;
+      for (let i = 0; i < 100; i++) {
+        if (restSet.has(dayKey(cursor))) { cursor -= 86400000; continue; }
+        const dayN = files.filter(f => (f.ts||0) >= cursor && (f.ts||0) < cursor + 86400000 && (f.duration||0) >= minDur).length;
+        if (dayN >= goal.count) { streak++; cursor -= 86400000; } else break;
+      }
+      const dowLabel = ['日','一','二','三','四','五','六'][new Date().getDay()];
+      deepseekDailyGreeting({
+        apiKey: settings.apiKey,
+        streak, totalCount: files.length, weekCount,
+        dayOfWeek: `星期${dowLabel}`,
+        isRestDay: restSet.has(todayK),
+        todayCount, goalCount: goal.count,
+      }).then(text => {
+        if (!text) throw new Error('empty');
+        setDailyGreeting(text);
+        try { localStorage.setItem('kobo.dailyGreeting', JSON.stringify({ date: todayK, text })); } catch {}
+      }).catch(() => {
+        const text = FALLBACK[Math.floor(Math.random() * FALLBACK.length)];
+        setDailyGreeting(text);
+        try { localStorage.setItem('kobo.dailyGreeting', JSON.stringify({ date: todayK, text })); } catch {}
+      });
+    }, 300);
+  }, []);
 
   // 每周复盘自动弹出：上次显示 > 6 天前 + 至少 3 条录像
   useEffect(() => {
@@ -5554,6 +5777,19 @@ const HomeView = ({ onSelect, onOpenSettings }) => {
           <div className="text-stone-500 text-[9px] tracking-[0.16em] uppercase mt-1 font-semibold">今日已练</div>
         </div>
       </div>
+
+      {/* ╭─────────────────────────────╮  */}
+      {/* │   AI 每日激励语              │  */}
+      {/* ╰─────────────────────────────╯  */}
+      {dailyGreeting && (
+        <div className="mb-5 p-3 border-l-2 border-[#F1A23F] bg-stone-50 fade-in" style={{borderRadius:'2px'}}>
+          <div className="flex items-baseline justify-between gap-2 mb-1">
+            <span className="text-[9px] text-stone-400 tracking-[0.18em] font-bold uppercase">CharlieLam 每日提示</span>
+            <span className="text-[9px] text-stone-300">{dateStr}</span>
+          </div>
+          <div className="text-[13px] text-stone-800 leading-relaxed">{dailyGreeting}</div>
+        </div>
+      )}
 
       {/* ╭─────────────────────────────╮  */}
       {/* │   HERO  ·  今日推荐         │  */}
@@ -6198,6 +6434,20 @@ const ImprovMode = () => {
 };
 
 // ============ Mode 2: 提词器 ============
+// 关键词模板：内置 10 套常用骨架 + 用户保存的自定义模板
+const KEYWORD_TEMPLATES = [
+  { id:'hook',     name:'🪝 钩子结构',   keywords:['钩子开头', '观点', '论证', '收尾'] },
+  { id:'prep',     name:'📐 PREP',       keywords:['观点', '理由', '例子', '重申观点'] },
+  { id:'golden',   name:'⭕ 黄金圈',     keywords:['Why', 'How', 'What'] },
+  { id:'story',    name:'📖 故事三幕',   keywords:['背景', '冲突', '顿悟'] },
+  { id:'fcf',      name:'🎯 FCF',        keywords:['事实', '冲突', '收获'] },
+  { id:'pain',     name:'💔 痛点共鸣',   keywords:['现象', '危害', '原因', '解决办法'] },
+  { id:'reveal',   name:'🔍 行业揭秘',   keywords:['揭秘', '塑造期待', '解决方案'] },
+  { id:'list',     name:'📋 干货盘点',   keywords:['炸裂开头', '盘点 1', '盘点 2', '盘点 3', '互动结尾'] },
+  { id:'contrast', name:'⚔️ 反差式',     keywords:['反差钩子', '信任背书', '解决方案'] },
+  { id:'sandao',   name:'🗡 三把刀通用', keywords:['钩子', '信任背书', '解决方案', '互动 CTA'] },
+];
+
 const TeleprompterMode = () => {
   const [stage, setStage] = useState('config'); // config | recording | done
   const [tpMode, setTpMode] = useState('script'); // script (完整稿) | keywords (关键词 freestyle)
@@ -6218,6 +6468,34 @@ const TeleprompterMode = () => {
   const [extractText, setExtractText] = useState('');
   const [extractLoading, setExtractLoading] = useState(false);
   const [extractError, setExtractError]     = useState('');
+  // 用户自定义模板
+  const [userTemplates, setUserTemplates] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('kobo.keywordTemplates') || '[]'); } catch { return []; }
+  });
+  const persistTemplates = (arr) => {
+    try { localStorage.setItem('kobo.keywordTemplates', JSON.stringify(arr)); } catch {}
+  };
+  const applyTemplate = (tpl) => {
+    setKeywords([...tpl.keywords]);
+    setKwIdx(0);
+  };
+  const saveCurrentAsTemplate = () => {
+    if (!keywords.length) return;
+    const name = (window.prompt('给这套关键词起个名字（10 字以内）：') || '').trim();
+    if (!name) return;
+    setUserTemplates(prev => {
+      const next = [{ id: 'u_' + Date.now(), name, keywords: [...keywords], ts: Date.now() }, ...prev].slice(0, 30);
+      persistTemplates(next);
+      return next;
+    });
+  };
+  const deleteUserTemplate = (id) => {
+    setUserTemplates(prev => {
+      const next = prev.filter(t => t.id !== id);
+      persistTemplates(next);
+      return next;
+    });
+  };
   const scrollerRef = useRef(null);
   const rafRef = useRef(null);
   const settings = useSettings();
@@ -6581,6 +6859,52 @@ const TeleprompterMode = () => {
 
       {tpMode === 'keywords' ? (
         <>
+          {/* 关键词模板库 */}
+          <Card className="p-5">
+            <div className="flex items-center gap-2.5 mb-3">
+              <div className="w-8 h-8 bg-[#FBEFF2] text-[#A30236] flex items-center justify-center" style={{borderRadius:'3px'}}>
+                <Icon name="list" size={16} strokeWidth={1.7}/>
+              </div>
+              <h3 className="font-display font-bold text-stone-900 text-[16px] m-0">关键词模板</h3>
+              <Tag color="amber">点一下应用</Tag>
+            </div>
+            <div className="text-[11px] text-stone-500 mb-3 leading-relaxed">
+              内置 10 套表达骨架 · 一键填入。可以应用后再增减关键词。
+            </div>
+            <div className="grid grid-cols-2 gap-1.5 mb-2">
+              {KEYWORD_TEMPLATES.map(tpl => (
+                <button key={tpl.id} onClick={() => applyTemplate(tpl)}
+                  className="text-left p-2 border border-stone-200 hover:border-[#A30236] bg-white transition-colors"
+                  style={{borderRadius:'2px'}}>
+                  <div className="text-xs font-semibold leading-tight">{tpl.name}</div>
+                  <div className="text-[9px] text-stone-500 mt-0.5 leading-tight truncate">
+                    {tpl.keywords.join(' · ')}
+                  </div>
+                </button>
+              ))}
+            </div>
+            {userTemplates.length > 0 && (
+              <>
+                <div className="text-[10px] text-stone-500 mt-3 mb-2 tracking-wider uppercase font-bold">我的模板（{userTemplates.length}）</div>
+                <div className="space-y-1.5">
+                  {userTemplates.map(tpl => (
+                    <div key={tpl.id} className="flex items-center gap-2 p-2 border border-stone-200 bg-white" style={{borderRadius:'2px'}}>
+                      <button onClick={() => applyTemplate(tpl)} className="flex-1 text-left">
+                        <div className="text-xs font-semibold">{tpl.name}</div>
+                        <div className="text-[9px] text-stone-500 mt-0.5 truncate">
+                          {tpl.keywords.join(' · ')}
+                        </div>
+                      </button>
+                      <button onClick={() => {
+                        if (window.confirm(`删除模板"${tpl.name}"？`)) deleteUserTemplate(tpl.id);
+                      }} className="text-stone-400 hover:text-red-600 text-sm shrink-0 px-2">×</button>
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
+          </Card>
+
           {/* 关键词录入 */}
           <Card className="p-6">
             <div className="flex items-center gap-2.5 mb-4">
@@ -6588,6 +6912,11 @@ const TeleprompterMode = () => {
                 <Icon name="list" size={16} strokeWidth={1.7} />
               </div>
               <h3 className="font-display font-bold text-stone-900 text-[16px] m-0">手动录入关键词</h3>
+              {keywords.length > 0 && (
+                <button onClick={saveCurrentAsTemplate} className="ml-auto text-[11px] text-[#A30236] hover:underline flex items-center gap-1">
+                  💾 存为模板
+                </button>
+              )}
             </div>
             <div className="text-xs text-stone-500 mb-3 leading-relaxed">
               逐个录入串联你这段口播的核心词。<br/>
