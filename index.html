@@ -3930,6 +3930,43 @@ async function deepseekGenerateTopics({ apiKey, theme, count = 6, style = '' }) 
   return arr.filter(x => typeof x === 'string').map(s => s.trim()).filter(Boolean);
 }
 
+// DeepSeek 关键词提取：把一段口播稿提炼成 8-12 个串联关键词
+async function deepseekExtractKeywords({ apiKey, text, count = 10 }) {
+  if (!apiKey) throw new Error('请先在设置里填 DeepSeek API Key');
+  if (!text?.trim()) throw new Error('请先填入要提取的文本');
+  const sys = '你是口播稿关键词提炼专家。把用户给的稿子提炼成串联关键词，让人看到关键词就能回忆起接下来要说什么、freestyle 串成完整内容。';
+  const usr = `把下面这段口播稿提炼成 ${count} 个关键词/短语：
+
+要求：
+1. 每个 2-6 字，不要长句
+2. 按口播叙述顺序排列
+3. 必须能串起整段（看到就能想起接下来该说什么）
+4. 仅返回 JSON 数组：["关键词1","关键词2","..."]
+5. 不要返回任何解释 / 代码块标记 / 前缀
+
+口播稿：
+${text}`;
+  const res = await fetch('https://api.deepseek.com/chat/completions', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+    body: JSON.stringify({
+      model: 'deepseek-chat',
+      messages: [{ role:'system', content:sys }, { role:'user', content:usr }],
+      temperature: 0.6,
+    }),
+  });
+  if (!res.ok) {
+    const txt = await res.text().catch(()=>'');
+    throw new Error(`DeepSeek ${res.status}: ${txt.slice(0,200) || res.statusText}`);
+  }
+  const data = await res.json();
+  const out = data.choices?.[0]?.message?.content || '';
+  const m = out.match(/\[[\s\S]*\]/);
+  if (!m) throw new Error('AI 输出非数组：' + out.slice(0,200));
+  const arr = JSON.parse(m[0]);
+  return arr.filter(x => typeof x === 'string').map(s => s.trim()).filter(Boolean);
+}
+
 // DeepSeek 主持人追问：根据对话历史 + 你刚说的话，生成下一个针对性问题
 async function deepseekHostFollowup({ apiKey, topic, history, lastUserSaid, kind = 'followup' }) {
   if (!apiKey) throw new Error('请先在"设置"里配置 DeepSeek API Key');
@@ -5337,6 +5374,7 @@ const ImprovMode = () => {
 // ============ Mode 2: 提词器 ============
 const TeleprompterMode = () => {
   const [stage, setStage] = useState('config'); // config | recording | done
+  const [tpMode, setTpMode] = useState('script'); // script (完整稿) | keywords (关键词 freestyle)
   const [text, setText] = useState('');
   const [fontSize, setFontSize] = useState(32);
   const [speed, setSpeed] = useState(40); // px / s
@@ -5347,10 +5385,43 @@ const TeleprompterMode = () => {
   const [recognition, setRecognition] = useState(null);
   const [transcript, setTranscript] = useState(''); // 累计 + 当前识别文本（合并）
   const transcriptRef = useRef('');
+  // 关键词模式
+  const [keywords, setKeywords]   = useState([]);
+  const [kwInput, setKwInput]     = useState('');
+  const [kwIdx, setKwIdx]         = useState(0);
+  const [extractText, setExtractText] = useState('');
+  const [extractLoading, setExtractLoading] = useState(false);
+  const [extractError, setExtractError]     = useState('');
   const scrollerRef = useRef(null);
   const rafRef = useRef(null);
+  const settings = useSettings();
   const cam = useCamera();
   const rec = useRecorder();
+
+  // 关键词录入：从输入框 commit（Enter 或 逗号 触发）
+  const commitKeyword = () => {
+    const parts = kwInput.split(/[,，\s]+/).map(s => s.trim()).filter(Boolean);
+    if (!parts.length) return;
+    setKeywords(prev => [...prev, ...parts]);
+    setKwInput('');
+  };
+  const removeKeyword = (i) => setKeywords(prev => prev.filter((_, j) => j !== i));
+  const clearKeywords = () => { setKeywords([]); setKwIdx(0); };
+
+  const aiExtractKeywords = async () => {
+    if (!extractText.trim()) { setExtractError('先粘贴一段长文本'); return; }
+    setExtractLoading(true);
+    setExtractError('');
+    try {
+      const kws = await deepseekExtractKeywords({ apiKey: settings.apiKey, text: extractText.trim(), count: 10 });
+      setKeywords(kws);
+      setKwIdx(0);
+    } catch (e) {
+      setExtractError(e.message);
+    } finally {
+      setExtractLoading(false);
+    }
+  };
 
   const sentences = useMemo(() =>
     text.split(/\n+|(?<=[。！？!?])/).map(s => s.trim()).filter(Boolean),
@@ -5462,11 +5533,13 @@ const TeleprompterMode = () => {
   const loadSample = (s) => { setText(s.text); };
 
   const begin = async () => {
-    if (!text.trim()) return;
+    if (tpMode === 'script' && !text.trim()) return;
+    if (tpMode === 'keywords' && !keywords.length) return;
     const s = await cam.start();
     if (!s) return;
     setStage('recording');
     setSentenceIdx(0);
+    setKwIdx(0);
     transcriptRef.current = '';
     setTranscript('');
     if (scrollerRef.current) scrollerRef.current.scrollTop = 0;
@@ -5515,12 +5588,17 @@ const TeleprompterMode = () => {
                   <BeautyButton cam={cam} />
                 </div>
                 <div className="flex items-center gap-1.5">
-                  {voiceFollow && (
+                  {voiceFollow && tpMode === 'script' && (
                     <div className="bg-emerald-600/90 text-white px-2.5 py-1.5 text-[10px] tracking-wider font-bold flex items-center gap-1.5" style={{borderRadius:'2px'}}>
                       <span className="w-1.5 h-1.5 rounded-full bg-white pulse-rec" />跟读
                     </div>
                   )}
-                  {mode === 'sentence' && (
+                  {tpMode === 'keywords' && keywords.length > 0 && (
+                    <div className="bg-[#F1A23F] text-stone-900 px-2.5 py-1.5 text-[10px] tracking-wider font-bold" style={{borderRadius:'2px'}}>
+                      关键词 {kwIdx + 1} / {keywords.length}
+                    </div>
+                  )}
+                  {tpMode === 'script' && mode === 'sentence' && (
                     <div className="bg-stone-950/80 text-white px-2.5 py-1.5 text-[10px] tracking-wider font-bold" style={{borderRadius:'2px'}}>
                       {sentenceIdx + 1} / {sentences.length}
                     </div>
@@ -5529,7 +5607,35 @@ const TeleprompterMode = () => {
               </div>
               {/* 提词器叠加 —— 占下半屏 */}
               <div className="absolute inset-x-0 bottom-0 pointer-events-none" style={{paddingBottom:'calc(env(safe-area-inset-bottom, 0px) + 92px)'}}>
-                {mode === 'scroll' ? (
+                {tpMode === 'keywords' ? (
+                  /* 关键词模式：进度点 + 上一个 + 当前（巨大居中）+ 下一个 */
+                  <div className="w-full bg-stone-950/90 px-6 py-7">
+                    <div className="flex items-center justify-center gap-1 mb-4">
+                      {keywords.map((_, i) => (
+                        <span key={i} className={`h-1 rounded-full transition-all ${
+                          i === kwIdx ? 'w-8 bg-[#F1A23F]' : i < kwIdx ? 'w-3 bg-stone-500' : 'w-3 bg-stone-700'
+                        }`} />
+                      ))}
+                    </div>
+                    {kwIdx > 0 && (
+                      <div className="text-center text-stone-500 leading-tight mb-3" style={{fontSize: `${Math.round(fontSize*0.4)}px`}}>
+                        ← {keywords[kwIdx - 1]}
+                      </div>
+                    )}
+                    <div className="text-center text-white leading-tight font-display font-bold tracking-wider"
+                         style={{fontSize: `${Math.round(fontSize*1.4)}px`}}>
+                      {keywords[kwIdx] || ''}
+                    </div>
+                    <div className="flex justify-center mt-3">
+                      <span className="h-[2px] bg-[#A30236]" style={{width:'56px'}} />
+                    </div>
+                    {kwIdx + 1 < keywords.length && (
+                      <div className="text-center text-stone-400 leading-tight mt-3" style={{fontSize: `${Math.round(fontSize*0.55)}px`}}>
+                        {keywords[kwIdx + 1]} →
+                      </div>
+                    )}
+                  </div>
+                ) : mode === 'scroll' ? (
                   <div ref={scrollerRef} className="w-full overflow-hidden bg-stone-950/85" style={{maxHeight:'44vh'}}>
                     <div className="px-7 py-5 text-stone-100 leading-relaxed whitespace-pre-wrap" style={{fontSize: `${fontSize}px`, paddingBottom: '120px', paddingTop: '40px'}}>
                       {text}
@@ -5557,7 +5663,13 @@ const TeleprompterMode = () => {
               {/* 底部控件 —— 悬浮在提词器下方 */}
               <div className="absolute left-3 right-3 flex items-center justify-between flex-wrap gap-2" style={{bottom:'calc(env(safe-area-inset-bottom, 0px) + 16px)'}}>
                 <div className="flex items-center gap-1.5 bg-stone-950/80 backdrop-blur px-2 py-1.5" style={{borderRadius:'2px'}}>
-                  {voiceFollow ? (
+                  {tpMode === 'keywords' ? (
+                    /* 关键词模式：手动切关键词 */
+                    <>
+                      <Btn size="sm" variant="secondary" onClick={() => setKwIdx(Math.max(0, kwIdx - 1))}>←</Btn>
+                      <Btn size="sm" variant="accent" onClick={() => setKwIdx(Math.min(keywords.length - 1, kwIdx + 1))}>下一个 →</Btn>
+                    </>
+                  ) : voiceFollow ? (
                     <>
                       <button onClick={() => setVoiceFollow(false)}
                         className="bg-emerald-600 text-white px-2 py-1 text-[10px] font-bold flex items-center gap-1"
@@ -5603,7 +5715,9 @@ const TeleprompterMode = () => {
   if (stage === 'done') {
     return <DoneView
       blob={rec.blob}
-      contextLabel={`提词器模式 · ${text.length} 字 · ${formatTime(rec.duration)}`}
+      contextLabel={tpMode === 'keywords'
+        ? `提词器 · 关键词 freestyle · ${keywords.length} 词 · ${formatTime(rec.duration)}`
+        : `提词器 · 完整稿 · ${text.length} 字 · ${formatTime(rec.duration)}`}
       onRetry={begin}
       onNew={reset}
     />;
@@ -5611,82 +5725,207 @@ const TeleprompterMode = () => {
 
   return (
     <div className="space-y-6 fade-in">
-      <Card className="p-6">
-        <div className="flex items-center gap-2.5 mb-4">
-          <div className="w-8 h-8 bg-[#FBEFF2] text-[#A30236] flex items-center justify-center" style={{borderRadius:"3px"}}>
-            <Icon name="document" size={16} strokeWidth={1.7} />
-          </div>
-          <h3 className="font-display font-bold text-stone-900 text-[16px] m-0">粘贴文案</h3>
-        </div>
-        <textarea
-          value={text}
-          onChange={e => setText(e.target.value)}
-          placeholder="把你刷到的爆款文案粘贴进来。也可以直接选下方的样本试用。"
-          className="w-full h-48 p-4 border border-stone-300 rounded-xl text-sm leading-relaxed focus:outline-none focus:border-amber-400 resize-none"
-        />
-        <div className="mt-3 flex items-center justify-between text-xs text-stone-500">
-          <span>{text.length} 字 · 约 {sentences.length} 句 · 预估口播 {Math.round(text.length/4)} 秒</span>
-          {text && <button onClick={() => setText('')} className="text-stone-500 hover:text-red-600">清空</button>}
+      {/* 提词器模式切换 */}
+      <Card className="p-3">
+        <div className="grid grid-cols-2 gap-2">
+          <button onClick={() => setTpMode('script')}
+            className={`text-left p-3 border-2 transition-all ${
+              tpMode === 'script' ? 'border-[#A30236] bg-[#FBEFF2]' : 'border-stone-200 hover:border-stone-300'
+            }`} style={{borderRadius:'3px'}}>
+            <div className="flex items-center gap-1.5 mb-0.5">
+              <Icon name="document" size={13} />
+              <span className="font-semibold text-sm">完整稿模式</span>
+            </div>
+            <div className="text-[11px] text-stone-500 leading-snug">字字念 · 滚动或分句</div>
+          </button>
+          <button onClick={() => setTpMode('keywords')}
+            className={`text-left p-3 border-2 transition-all ${
+              tpMode === 'keywords' ? 'border-[#A30236] bg-[#FBEFF2]' : 'border-stone-200 hover:border-stone-300'
+            }`} style={{borderRadius:'3px'}}>
+            <div className="flex items-center gap-1.5 mb-0.5">
+              <Icon name="sparkle" size={13} />
+              <span className="font-semibold text-sm">关键词模式</span>
+              <Tag color="orange">freestyle</Tag>
+            </div>
+            <div className="text-[11px] text-stone-500 leading-snug">只看关键词 · 自由发挥串联</div>
+          </button>
         </div>
       </Card>
 
-      <Card className="p-6">
-        <div className="flex items-center gap-2.5 mb-4">
-          <div className="w-8 h-8 bg-[#FBEFF2] text-[#A30236] flex items-center justify-center" style={{borderRadius:"3px"}}>
-            <Icon name="sparkle" size={16} strokeWidth={1.7} />
-          </div>
-          <h3 className="font-display font-bold text-stone-900 text-[16px] m-0">试试这几条万赞样本</h3>
-        </div>
-        <div className="grid grid-cols-1 gap-2.5">
-          {SAMPLE_SCRIPTS.map((s, i) => (
-            <button key={i} onClick={() => loadSample(s)}
-              className="text-left p-4 border border-stone-200 hover:border-amber-400 rounded-xl bg-stone-50 hover:bg-amber-50 transition-all">
-              <div className="flex items-center justify-between mb-2">
-                <span className="text-xs font-medium text-stone-700">{s.title}</span>
-                <Tag color="rose">❤ {s.likes}</Tag>
+      {tpMode === 'keywords' ? (
+        <>
+          {/* 关键词录入 */}
+          <Card className="p-6">
+            <div className="flex items-center gap-2.5 mb-4">
+              <div className="w-8 h-8 bg-[#FBEFF2] text-[#A30236] flex items-center justify-center" style={{borderRadius:"3px"}}>
+                <Icon name="list" size={16} strokeWidth={1.7} />
               </div>
-              <div className="text-xs text-stone-500 line-clamp-3 leading-relaxed">{s.text.slice(0, 80)}...</div>
-            </button>
-          ))}
-        </div>
-      </Card>
+              <h3 className="font-display font-bold text-stone-900 text-[16px] m-0">手动录入关键词</h3>
+            </div>
+            <div className="text-xs text-stone-500 mb-3 leading-relaxed">
+              逐个录入串联你这段口播的核心词。<br/>
+              <span className="text-stone-700">配合豆包语音输入法</span>可以边说边录，比打字快 3 倍。<br/>
+              一个一个回车提交，也支持逗号 / 空格分隔批量录入。
+            </div>
+            <div className="flex gap-2 mb-3">
+              <input
+                value={kwInput}
+                onChange={e => setKwInput(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); commitKeyword(); } }}
+                placeholder="如：反差 / 故事 / 数据 / 收尾..."
+                className="flex-1 px-3 py-2 border border-stone-300 text-sm focus:outline-none focus:border-[#A30236]"
+                style={{borderRadius:'2px'}}
+              />
+              <Btn size="md" variant="secondary" onClick={commitKeyword} disabled={!kwInput.trim()}>添加</Btn>
+            </div>
+            {keywords.length > 0 ? (
+              <>
+                <div className="flex flex-wrap gap-1.5 mb-2">
+                  {keywords.map((k, i) => (
+                    <span key={i} className="inline-flex items-center gap-1 bg-stone-900 text-white px-2.5 py-1 text-xs font-medium" style={{borderRadius:'2px'}}>
+                      <span className="text-amber-300 tabular-nums">{String(i + 1).padStart(2, '0')}</span>
+                      {k}
+                      <button onClick={() => removeKeyword(i)} className="text-stone-400 hover:text-red-300 ml-1">×</button>
+                    </span>
+                  ))}
+                </div>
+                <button onClick={clearKeywords} className="text-xs text-stone-500 hover:text-red-600">清空全部</button>
+              </>
+            ) : (
+              <div className="text-[11px] text-stone-400 italic">还没录入关键词</div>
+            )}
+          </Card>
 
-      <Card className="p-6">
-        <div className="flex items-center gap-2.5 mb-4">
-          <div className="w-8 h-8 bg-[#FBEFF2] text-[#A30236] flex items-center justify-center" style={{borderRadius:"3px"}}>
-            <Icon name="settings" size={16} strokeWidth={1.7} />
+          {/* AI 一键提取 */}
+          <Card className="p-6">
+            <div className="flex items-center gap-2.5 mb-3">
+              <div className="w-8 h-8 bg-[#FBEFF2] text-[#A30236] flex items-center justify-center" style={{borderRadius:"3px"}}>
+                <Icon name="sparkle" size={16} strokeWidth={1.7} />
+              </div>
+              <h3 className="font-display font-bold text-stone-900 text-[16px] m-0 flex items-center gap-2">
+                AI 一键提取 <Tag color="violet">DeepSeek</Tag>
+              </h3>
+            </div>
+            <div className="text-xs text-stone-500 mb-3">
+              粘贴你写好的稿子 / 大纲 / 长文本，AI 自动提炼 10 个串联关键词。
+            </div>
+            <textarea
+              value={extractText}
+              onChange={e => setExtractText(e.target.value)}
+              placeholder="把要提取的长文本粘贴进来..."
+              className="w-full h-32 p-3 border border-stone-300 text-sm leading-relaxed focus:outline-none focus:border-[#A30236] resize-none"
+              style={{borderRadius:'3px'}}
+            />
+            <div className="mt-3 flex items-center justify-between gap-2 flex-wrap">
+              <div className="text-xs text-stone-500">{extractText.length} 字</div>
+              <Btn variant="accent" onClick={aiExtractKeywords} disabled={!extractText.trim() || extractLoading || !settings.apiKey}>
+                {extractLoading ? '提取中...' : 'AI 提取 10 个关键词'}
+              </Btn>
+            </div>
+            {!settings.apiKey && <div className="text-[11px] text-stone-400 mt-2">需先在设置里填 DeepSeek API Key</div>}
+            {extractError && <div className="text-xs text-red-600 mt-2">{extractError}</div>}
+          </Card>
+
+          <Card className="p-6">
+            <div className="flex items-center gap-2.5 mb-3">
+              <div className="w-8 h-8 bg-[#FBEFF2] text-[#A30236] flex items-center justify-center" style={{borderRadius:"3px"}}>
+                <Icon name="settings" size={16} strokeWidth={1.7} />
+              </div>
+              <h3 className="font-display font-bold text-stone-900 text-[16px] m-0">字号</h3>
+            </div>
+            <input type="range" min="18" max="56" value={fontSize} onChange={e => setFontSize(+e.target.value)} className="w-full" />
+            <div className="bg-stone-950 rounded p-3 mt-2 text-center">
+              <div className="text-white font-display font-bold" style={{fontSize:`${fontSize}px`}}>关键词</div>
+            </div>
+          </Card>
+
+          <div className="flex justify-end gap-3">
+            {cam.error && <span className="text-sm text-red-600 self-center">{cam.error}</span>}
+            <Btn variant="primary" size="lg" onClick={begin} disabled={!keywords.length}>
+              开始 freestyle 录制 →
+            </Btn>
           </div>
-          <h3 className="font-display font-bold text-stone-900 text-[16px] m-0">提词器设置</h3>
-        </div>
-        <div className="space-y-5">
-          <div>
-            <div className="text-sm font-medium mb-2">显示模式</div>
-            <div className="flex gap-2">
-              {[{v:'scroll',l:'滚动',d:'整段连续向上滚'},{v:'sentence',l:'分句',d:'一次显示一句，最自然'}].map(o => (
-                <button key={o.v} onClick={() => setMode(o.v)}
-                  className={`flex-1 text-left p-3 rounded-lg border-2 transition-all ${
-                    mode === o.v ? 'border-amber-400 bg-amber-50' : 'border-stone-200 hover:border-stone-300'
-                  }`}>
-                  <div className="font-medium text-sm">{o.l}</div>
-                  <div className="text-xs text-stone-500 mt-0.5">{o.d}</div>
+        </>
+      ) : (
+        <>
+          <Card className="p-6">
+            <div className="flex items-center gap-2.5 mb-4">
+              <div className="w-8 h-8 bg-[#FBEFF2] text-[#A30236] flex items-center justify-center" style={{borderRadius:"3px"}}>
+                <Icon name="document" size={16} strokeWidth={1.7} />
+              </div>
+              <h3 className="font-display font-bold text-stone-900 text-[16px] m-0">粘贴文案</h3>
+            </div>
+            <textarea
+              value={text}
+              onChange={e => setText(e.target.value)}
+              placeholder="把你刷到的爆款文案粘贴进来。也可以直接选下方的样本试用。"
+              className="w-full h-48 p-4 border border-stone-300 rounded-xl text-sm leading-relaxed focus:outline-none focus:border-amber-400 resize-none"
+            />
+            <div className="mt-3 flex items-center justify-between text-xs text-stone-500">
+              <span>{text.length} 字 · 约 {sentences.length} 句 · 预估口播 {Math.round(text.length/4)} 秒</span>
+              {text && <button onClick={() => setText('')} className="text-stone-500 hover:text-red-600">清空</button>}
+            </div>
+          </Card>
+
+          <Card className="p-6">
+            <div className="flex items-center gap-2.5 mb-4">
+              <div className="w-8 h-8 bg-[#FBEFF2] text-[#A30236] flex items-center justify-center" style={{borderRadius:"3px"}}>
+                <Icon name="sparkle" size={16} strokeWidth={1.7} />
+              </div>
+              <h3 className="font-display font-bold text-stone-900 text-[16px] m-0">试试这几条万赞样本</h3>
+            </div>
+            <div className="grid grid-cols-1 gap-2.5">
+              {SAMPLE_SCRIPTS.map((s, i) => (
+                <button key={i} onClick={() => loadSample(s)}
+                  className="text-left p-4 border border-stone-200 hover:border-amber-400 rounded-xl bg-stone-50 hover:bg-amber-50 transition-all">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-xs font-medium text-stone-700">{s.title}</span>
+                    <Tag color="rose">❤ {s.likes}</Tag>
+                  </div>
+                  <div className="text-xs text-stone-500 line-clamp-3 leading-relaxed">{s.text.slice(0, 80)}...</div>
                 </button>
               ))}
             </div>
-          </div>
-          <div>
-            <div className="text-sm font-medium mb-2">字号 <span className="text-stone-400 font-normal">({fontSize}px)</span></div>
-            <input type="range" min="18" max="56" value={fontSize} onChange={e => setFontSize(+e.target.value)} className="w-full" />
-            <div className="bg-stone-950 rounded-lg p-3 mt-2">
-              <div className="text-stone-100" style={{fontSize:`${fontSize*0.5}px`}}>预览：这是你录制时看到的字号</div>
-            </div>
-          </div>
-        </div>
-      </Card>
+          </Card>
 
-      <div className="flex justify-end gap-3">
-        {cam.error && <span className="text-sm text-red-600 self-center">{cam.error}</span>}
-        <Btn variant="primary" size="lg" onClick={begin} disabled={!text.trim()}>开始录制 →</Btn>
-      </div>
+          <Card className="p-6">
+            <div className="flex items-center gap-2.5 mb-4">
+              <div className="w-8 h-8 bg-[#FBEFF2] text-[#A30236] flex items-center justify-center" style={{borderRadius:"3px"}}>
+                <Icon name="settings" size={16} strokeWidth={1.7} />
+              </div>
+              <h3 className="font-display font-bold text-stone-900 text-[16px] m-0">提词器设置</h3>
+            </div>
+            <div className="space-y-5">
+              <div>
+                <div className="text-sm font-medium mb-2">显示模式</div>
+                <div className="flex gap-2">
+                  {[{v:'scroll',l:'滚动',d:'整段连续向上滚'},{v:'sentence',l:'分句',d:'一次显示一句，最自然'}].map(o => (
+                    <button key={o.v} onClick={() => setMode(o.v)}
+                      className={`flex-1 text-left p-3 rounded-lg border-2 transition-all ${
+                        mode === o.v ? 'border-amber-400 bg-amber-50' : 'border-stone-200 hover:border-stone-300'
+                      }`}>
+                      <div className="font-medium text-sm">{o.l}</div>
+                      <div className="text-xs text-stone-500 mt-0.5">{o.d}</div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div>
+                <div className="text-sm font-medium mb-2">字号 <span className="text-stone-400 font-normal">({fontSize}px)</span></div>
+                <input type="range" min="18" max="56" value={fontSize} onChange={e => setFontSize(+e.target.value)} className="w-full" />
+                <div className="bg-stone-950 rounded-lg p-3 mt-2">
+                  <div className="text-stone-100" style={{fontSize:`${fontSize*0.5}px`}}>预览：这是你录制时看到的字号</div>
+                </div>
+              </div>
+            </div>
+          </Card>
+
+          <div className="flex justify-end gap-3">
+            {cam.error && <span className="text-sm text-red-600 self-center">{cam.error}</span>}
+            <Btn variant="primary" size="lg" onClick={begin} disabled={!text.trim()}>开始录制 →</Btn>
+          </div>
+        </>
+      )}
     </div>
   );
 };
