@@ -4058,6 +4058,100 @@ async function deepseekDailyGreeting({ apiKey, streak, totalCount, weekCount, da
   return (data.choices?.[0]?.message?.content || '').trim().replace(/^["']|["']$/g, '');
 }
 
+// ============ 口播分析（本地，零成本）============
+// 中文口头禅词表（按字符数从长到短，避免 "就是" 被算两次而 "就" 又算）
+const FILLER_WORDS = ['我觉得吧', '我觉得', '所以说', '怎么说呢', '然后呢', '反正', '其实', '那个', '这个', '就是', '然后', '所以', '呃', '嗯', '啊'];
+
+// 中文按字算 wpm（去掉空格 + 标点）
+function calculateWPM(text, durationSec) {
+  if (!text || !durationSec || durationSec < 1) return 0;
+  const chars = String(text).replace(/[\s\p{P}]/gu, '').length;
+  return Math.round((chars / durationSec) * 60);
+}
+
+// 口头禅出现次数（带去重保护：长词先匹配，匹配过的字符替换掉）
+function analyzeFillerWords(text) {
+  if (!text) return [];
+  let t = String(text);
+  const out = [];
+  for (const w of FILLER_WORDS) {
+    const re = new RegExp(w, 'g');
+    const m = t.match(re) || [];
+    if (m.length > 0) {
+      out.push({ word: w, count: m.length });
+      // 把已匹配的位置替换为占位（避免 "就是" 被 "就" 二次匹配）
+      t = t.replace(re, '·'.repeat(w.length));
+    }
+  }
+  return out.sort((a, b) => b.count - a.count);
+}
+
+function wpmBand(wpm) {
+  if (wpm < 180) return { label:'偏慢', color:'#A0775B' };
+  if (wpm > 320) return { label:'偏快', color:'#A30236' };
+  if (wpm > 260) return { label:'紧凑', color:'#F1A23F' };
+  return { label:'舒适', color:'#10b981' };
+}
+
+// DeepSeek 教练复盘：基于转录稿给 5 维评分 + 改进建议
+async function deepseekCoachReview({ apiKey, topic, transcript, durationSec, wpm, fillerTop }) {
+  if (!apiKey) throw new Error('需要 API Key');
+  const sys = '你是一位资深口播教练，帮自媒体创作者复盘短视频口播稿。冷静、具体、动作化反馈，不要客套、不要鸡汤。';
+  const fillerLine = (fillerTop && fillerTop.length)
+    ? fillerTop.slice(0, 5).map(f => `${f.word}×${f.count}`).join('、')
+    : '基本没有明显口头禅';
+  const usr = `话题：《${topic || '自由口播'}》
+时长：${Math.round(durationSec)} 秒
+语速：${wpm} 字/分（中文 200-260 为舒适区）
+高频口头禅：${fillerLine}
+
+【转录稿】
+"""
+${String(transcript).slice(0, 2400)}
+"""
+
+请严格按 JSON 返回（不要 markdown 代码块、不要解释）：
+{
+  "scores": { "hook": 整数 0-10, "logic": 整数 0-10, "filler": 整数 0-10, "ending": 整数 0-10, "pacing": 整数 0-10 },
+  "summary": "30-50 字总评",
+  "highlights": ["1-2 条最亮的具体细节（如可，引用一句原话）"],
+  "suggestions": ["3-4 条立刻可改进的动作（≤20 字 / 条）"]
+}
+
+评分口径：
+- hook：前 5 秒是否抓住人
+- logic：观点是否清楚、有逻辑骨架（钩子/观点/论证/收尾）
+- filler：口头禅越少分越高（已给统计）
+- ending：收尾是否有 take-away 或 call-to-action
+- pacing：语速是否合适（已给 wpm）
+
+要求：
+- suggestions 要具体到动作：「开头加一句钩子」/「少说'然后'」/「语速放慢 10%」
+- 不要"加油 / 继续努力"这种空话
+- 转录稿过短 / 无意义时，scores 全给 5，suggestions 提醒"先说够 60 秒再复盘"`;
+
+  const res = await fetch('https://api.deepseek.com/chat/completions', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+    body: JSON.stringify({
+      model: 'deepseek-chat',
+      messages: [{ role:'system', content:sys }, { role:'user', content:usr }],
+      temperature: 0.4,
+      max_tokens: 700,
+    }),
+  });
+  if (!res.ok) {
+    const txt = await res.text().catch(() => '');
+    throw new Error(`DeepSeek ${res.status}: ${txt.slice(0, 160) || res.statusText}`);
+  }
+  const data = await res.json();
+  let out = (data.choices?.[0]?.message?.content || '').trim();
+  out = out.replace(/^```json\s*/i, '').replace(/```$/, '').trim();
+  const m = out.match(/\{[\s\S]*\}/);
+  if (!m) throw new Error('AI 输出非 JSON：' + out.slice(0, 200));
+  return JSON.parse(m[0]);
+}
+
 // DeepSeek 主持人追问：根据对话历史 + 你刚说的话，生成下一个针对性问题
 async function deepseekHostFollowup({ apiKey, topic, history, lastUserSaid, kind = 'followup' }) {
   if (!apiKey) throw new Error('请先在"设置"里配置 DeepSeek API Key');
@@ -4104,7 +4198,7 @@ async function deepseekHostFollowup({ apiKey, topic, history, lastUserSaid, kind
 const SettingsContext = React.createContext({
   apiKey: '', userApiKey: '', isBuiltinKey: true, setApiKey: () => {},
   saveDir: null, setSaveDir: () => {},
-  savedFiles: [], addSavedFile: () => {}, removeSavedFile: () => {}, clearAllSavedFiles: () => {},
+  savedFiles: [], addSavedFile: () => {}, updateSavedFile: () => {}, removeSavedFile: () => {}, clearAllSavedFiles: () => {},
   dailyGoal: { count: 3, durationSec: 60 }, setDailyGoal: () => {},
   unlockedAchievements: [], markAchievementsSeen: () => {},
   lastWeeklyRecap: 0, setLastWeeklyRecap: () => {},
@@ -4908,7 +5002,7 @@ const BeautyButton = ({ cam, style = {}, className = '' }) => {
 };
 
 // ============ Done View ============
-const DoneView = ({ blob, contextLabel, duration = 0, onRetry, onNew, extra }) => {
+const DoneView = ({ blob, contextLabel, duration = 0, onRetry, onNew, extra, transcript = '' }) => {
   const url = useMemo(() => blob ? URL.createObjectURL(blob) : null, [blob]);
   const settings = useSettings();
   const [saveStatus, setSaveStatus] = useState({ state: 'pending' });
@@ -4921,10 +5015,10 @@ const DoneView = ({ blob, contextLabel, duration = 0, onRetry, onNew, extra }) =
     saveVideoToDisk(blob, contextLabel, settings.saveDir)
       .then(r => {
         setSaveStatus({ state: 'saved', ...r });
-        settings.addSavedFile?.({ ...r, label: contextLabel, duration, ts: Date.now() });
+        settings.addSavedFile?.({ ...r, label: contextLabel, duration, ts: Date.now(), transcript: transcript || '' });
       })
       .catch(err => setSaveStatus({ state: 'error', error: err.message }));
-  }, [blob, contextLabel, duration, settings.saveDir]);
+  }, [blob, contextLabel, duration, settings.saveDir, transcript]);
 
   useEffect(() => () => { if (url) URL.revokeObjectURL(url); }, [url]);
 
@@ -5089,7 +5183,15 @@ const DoneView = ({ blob, contextLabel, duration = 0, onRetry, onNew, extra }) =
         ) : (
           <div className="text-stone-400 text-sm p-8 text-center">录制为空（可能时长太短或权限被拒）</div>
         )}
+
+        {/* 给这条录像打标签：高光 / 待重录 / 已发布 */}
+        {saveStatus.state === 'saved' && saveStatus.filename && (
+          <FileTagger filename={saveStatus.filename} />
+        )}
       </Card>
+
+      {/* 🎯 AI 教练复盘 */}
+      {blob && <CoachReview topic={contextLabel} durationSec={duration} initialTranscript={transcript} />}
 
       {/* ✨ AI 发布助手 */}
       {blob && contextLabel && <PublishKit topic={contextLabel} duration={duration} />}
@@ -5098,6 +5200,355 @@ const DoneView = ({ blob, contextLabel, duration = 0, onRetry, onNew, extra }) =
       {blob && contextLabel && <PublishStep contextLabel={contextLabel} />}
 
       {extra}
+    </div>
+  );
+};
+
+// ============ AI 教练复盘：5 维评分 + 改进建议 ============
+const CoachReview = ({ topic, durationSec = 0, initialTranscript = '' }) => {
+  const settings = useSettings();
+  const [text, setText]       = useState(initialTranscript || '');
+  const [review, setReview]   = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError]     = useState('');
+  const [expanded, setExpanded] = useState(initialTranscript ? false : false); // 默认折叠，点开后展开
+
+  // 本地统计（实时随 text 变化）
+  const stats = useMemo(() => {
+    const wpm = calculateWPM(text, durationSec);
+    const fillers = analyzeFillerWords(text);
+    return { wpm, fillers };
+  }, [text, durationSec]);
+
+  const band = wpmBand(stats.wpm);
+
+  const run = async () => {
+    if (!text.trim() || text.trim().length < 15) {
+      setError('转录稿太短（至少 15 字）');
+      return;
+    }
+    setLoading(true); setError('');
+    try {
+      const r = await deepseekCoachReview({
+        apiKey: settings.apiKey,
+        topic: topic || '',
+        transcript: text,
+        durationSec,
+        wpm: stats.wpm,
+        fillerTop: stats.fillers,
+      });
+      setReview(r);
+    } catch (e) {
+      setError(e.message || String(e));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // 折叠态：用户没主动展开 → 只显示一个"展开 AI 复盘"按钮，节省视觉空间
+  if (!expanded) {
+    return (
+      <Card className="p-4 mb-4 border-l-[3px] border-amber-400 cursor-pointer hover:bg-amber-50/50 transition-colors"
+        onClick={() => setExpanded(true)}>
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2.5">
+            <div className="w-8 h-8 bg-amber-100 text-amber-700 flex items-center justify-center" style={{borderRadius:"3px"}}>
+              <Icon name="sparkle" size={16} strokeWidth={1.7} />
+            </div>
+            <div>
+              <div className="font-display font-bold text-stone-900 text-[15px]">🎯 AI 教练复盘</div>
+              <div className="text-[11px] text-stone-500 mt-0.5">5 维评分 · 口头禅统计 · 改进建议</div>
+            </div>
+          </div>
+          <div className="text-amber-700 text-xs font-bold">展开 →</div>
+        </div>
+      </Card>
+    );
+  }
+
+  return (
+    <Card className="p-6 mb-4 border-l-[3px] border-amber-400">
+      <div className="flex items-center justify-between mb-4">
+        <div className="flex items-center gap-2.5">
+          <div className="w-8 h-8 bg-amber-100 text-amber-700 flex items-center justify-center" style={{borderRadius:"3px"}}>
+            <Icon name="sparkle" size={16} strokeWidth={1.7} />
+          </div>
+          <h3 className="font-display font-bold text-stone-900 text-[16px] m-0">🎯 AI 教练复盘</h3>
+        </div>
+        <button onClick={() => setExpanded(false)} className="text-stone-400 hover:text-stone-700 text-xs">收起 ✕</button>
+      </div>
+
+      {!review && (
+        <>
+          <div className="text-[12px] text-stone-600 mb-2">
+            {initialTranscript
+              ? '你的实时转录已填入下方。可手动修正再调 AI。'
+              : '把你刚才说的话粘贴 / 输入下面（iOS Safari 没有实时转录，可手打要点）。'}
+          </div>
+          <textarea
+            value={text}
+            onChange={e => setText(e.target.value)}
+            placeholder="转录稿（至少 15 字）..."
+            rows={5}
+            className="w-full p-3 border border-stone-300 text-sm leading-relaxed"
+            style={{borderRadius: '3px', fontFamily: 'inherit'}}
+          />
+
+          {/* 本地实时统计 */}
+          <div className="grid grid-cols-2 gap-2 mt-3 text-[12px]">
+            <div className="p-2.5 bg-stone-50 border border-stone-200" style={{borderRadius:'3px'}}>
+              <div className="text-[10px] tracking-wider uppercase text-stone-500 mb-1 font-bold">语速</div>
+              <div className="flex items-baseline gap-1.5">
+                <span className="text-xl font-display font-bold tabular-nums text-stone-900">{stats.wpm}</span>
+                <span className="text-[11px] text-stone-500">字/分</span>
+                <span className="text-[11px] font-bold ml-auto" style={{color: band.color}}>{band.label}</span>
+              </div>
+            </div>
+            <div className="p-2.5 bg-stone-50 border border-stone-200" style={{borderRadius:'3px'}}>
+              <div className="text-[10px] tracking-wider uppercase text-stone-500 mb-1 font-bold">口头禅</div>
+              {stats.fillers.length === 0 ? (
+                <div className="text-[13px] font-bold text-emerald-600">✓ 干净</div>
+              ) : (
+                <div className="flex flex-wrap gap-1">
+                  {stats.fillers.slice(0, 4).map(f => (
+                    <span key={f.word} className="text-[10px] bg-amber-100 text-amber-900 px-1.5 py-0.5 font-bold" style={{borderRadius:'2px'}}>
+                      {f.word} <span className="opacity-70">×{f.count}</span>
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="mt-4 flex items-center gap-3">
+            <Btn variant="primary" onClick={run} disabled={loading}>
+              {loading ? '思考中...' : '调用 AI 复盘 ✨'}
+            </Btn>
+            {error && <span className="text-red-600 text-sm">{error}</span>}
+          </div>
+        </>
+      )}
+
+      {review && (
+        <>
+          {/* 5 维评分 */}
+          <div className="grid grid-cols-5 gap-1.5 mb-4">
+            {[
+              {k:'hook',    l:'钩子'},
+              {k:'logic',   l:'逻辑'},
+              {k:'filler',  l:'口头禅'},
+              {k:'ending',  l:'收尾'},
+              {k:'pacing',  l:'节奏'},
+            ].map(({k,l}) => {
+              const v = +(review.scores?.[k] ?? 0);
+              const color = v >= 8 ? '#10b981' : v >= 6 ? '#A30236' : v >= 4 ? '#A0775B' : '#737373';
+              return (
+                <div key={k} className="text-center p-2.5 border border-stone-200" style={{borderRadius:'3px'}}>
+                  <div className="text-[10px] tracking-wider text-stone-500 uppercase font-bold mb-1">{l}</div>
+                  <div className="text-2xl font-display font-bold tabular-nums" style={{color}}>{v}</div>
+                </div>
+              );
+            })}
+          </div>
+
+          {/* 总评 */}
+          {review.summary && (
+            <div className="p-3 bg-stone-50 border-l-[3px] border-stone-400 text-[13px] text-stone-800 leading-relaxed mb-3">
+              {review.summary}
+            </div>
+          )}
+
+          {/* 亮点 */}
+          {review.highlights?.length > 0 && (
+            <div className="mb-3">
+              <div className="text-[10px] tracking-[0.18em] uppercase text-emerald-700 font-bold mb-1.5">✨ 亮点</div>
+              <ul className="space-y-1.5">
+                {review.highlights.map((h, i) => (
+                  <li key={i} className="text-[13px] text-stone-700 pl-3 border-l border-emerald-300 leading-relaxed">{h}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {/* 改进建议 */}
+          {review.suggestions?.length > 0 && (
+            <div className="mb-3">
+              <div className="text-[10px] tracking-[0.18em] uppercase text-[#A30236] font-bold mb-1.5">📌 下一条可改进的</div>
+              <ul className="space-y-1.5">
+                {review.suggestions.map((s, i) => (
+                  <li key={i} className="text-[13px] text-stone-800 pl-3 border-l border-[#A30236] leading-relaxed">{s}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {/* 本地补充统计 */}
+          <div className="mt-4 pt-3 border-t border-stone-200 flex items-center gap-3 text-[11px] text-stone-500">
+            <span>语速 <span className="font-bold text-stone-700">{stats.wpm}</span> 字/分</span>
+            <span>·</span>
+            <span>口头禅 {stats.fillers.length === 0 ? '0' : stats.fillers.reduce((s, f) => s + f.count, 0)} 处</span>
+          </div>
+
+          <div className="flex gap-2 mt-3">
+            <Btn variant="secondary" onClick={() => { setReview(null); }}>重新复盘</Btn>
+          </div>
+        </>
+      )}
+    </Card>
+  );
+};
+
+// ============ 录像打标签：高光 / 待重录 / 已发布 ============
+const TAG_OPTIONS = [
+  { id:'star',      label:'⭐ 高光',     color:'#F1A23F', bg:'#FEF3C7' },
+  { id:'redo',      label:'🔁 待重录',   color:'#A30236', bg:'#FBEFF2' },
+  { id:'published', label:'📤 已发布',   color:'#10b981', bg:'#D1FAE5' },
+];
+
+const FileTagger = ({ filename, compact = false }) => {
+  const { savedFiles, updateSavedFile } = useSettings();
+  const file = savedFiles.find(f => f.filename === filename);
+  const current = file?.tag || null;
+
+  const toggle = (id) => {
+    updateSavedFile(filename, { tag: current === id ? null : id });
+  };
+
+  if (compact) {
+    // 紧凑模式：用在列表里，仅显示当前标签 + 切换按钮
+    return (
+      <div className="flex items-center gap-1">
+        {TAG_OPTIONS.map(opt => (
+          <button key={opt.id} onClick={(e) => { e.stopPropagation(); toggle(opt.id); }}
+            className={`text-[9px] tracking-wider font-bold px-1 py-0.5 transition-colors ${current === opt.id ? '' : 'opacity-30 hover:opacity-70'}`}
+            style={{
+              borderRadius:'2px',
+              background: current === opt.id ? opt.bg : 'transparent',
+              color: current === opt.id ? opt.color : '#737373',
+              border: `1px solid ${current === opt.id ? opt.color : '#d6d3d1'}`,
+            }}
+            title={opt.label}>
+            {opt.label.split(' ')[0]}
+          </button>
+        ))}
+      </div>
+    );
+  }
+
+  return (
+    <div className="mt-3 pt-3 border-t border-stone-200">
+      <div className="text-[10px] tracking-[0.22em] uppercase text-stone-500 font-bold mb-2">给这条录像标记 · 之后可在历史里筛</div>
+      <div className="flex flex-wrap gap-2">
+        {TAG_OPTIONS.map(opt => (
+          <button key={opt.id} onClick={() => toggle(opt.id)}
+            className="px-3 py-1.5 text-xs font-bold tracking-wider transition-all"
+            style={{
+              borderRadius: '3px',
+              background: current === opt.id ? opt.bg : 'transparent',
+              color: current === opt.id ? opt.color : '#525252',
+              border: `1.5px solid ${current === opt.id ? opt.color : '#d6d3d1'}`,
+            }}>
+            {opt.label}
+          </button>
+        ))}
+        {current && (
+          <button onClick={() => updateSavedFile(filename, { tag: null })}
+            className="px-3 py-1.5 text-xs text-stone-500 hover:text-stone-800 underline">
+            清除
+          </button>
+        )}
+      </div>
+    </div>
+  );
+};
+
+// ============ 录像历史列表（带标签筛选）============
+const RecordingHistoryList = ({ settings: s }) => {
+  const [filterTag, setFilterTag] = useState('all'); // all | star | redo | published | untagged
+
+  const allFiles = s.savedFiles || [];
+  const tagCounts = useMemo(() => {
+    const c = { star: 0, redo: 0, published: 0, untagged: 0 };
+    for (const f of allFiles) {
+      if (f.tag && c[f.tag] !== undefined) c[f.tag]++;
+      else c.untagged++;
+    }
+    return c;
+  }, [allFiles]);
+
+  const filtered = useMemo(() => {
+    if (filterTag === 'all') return allFiles;
+    if (filterTag === 'untagged') return allFiles.filter(f => !f.tag);
+    return allFiles.filter(f => f.tag === filterTag);
+  }, [allFiles, filterTag]);
+
+  const FILTERS = [
+    { id:'all',       label:'全部',     count: allFiles.length },
+    { id:'star',      label:'⭐ 高光',   count: tagCounts.star },
+    { id:'redo',      label:'🔁 待重录', count: tagCounts.redo },
+    { id:'published', label:'📤 已发布', count: tagCounts.published },
+    { id:'untagged',  label:'未标记',   count: tagCounts.untagged },
+  ];
+
+  return (
+    <div className="mb-6 pt-6 border-t border-stone-200">
+      <div className="flex items-center justify-between mb-2">
+        <div className="text-sm font-medium">录制历史 <span className="text-stone-400 text-xs ml-1">({allFiles.length}/50)</span></div>
+        <button onClick={() => {
+          if (window.confirm(`确定清空全部 ${allFiles.length} 条历史记录？\n\n如果当时保存到了目录，磁盘上的文件也会被删除。`)) {
+            s.clearAllSavedFiles();
+          }
+        }} className="text-xs text-stone-500 hover:text-red-600">清空全部</button>
+      </div>
+
+      {/* 标签筛选 */}
+      <div className="flex flex-wrap gap-1 mb-2">
+        {FILTERS.map(f => (
+          <button key={f.id} onClick={() => setFilterTag(f.id)}
+            className={`px-2 py-1 text-[11px] tracking-wider font-bold transition-colors ${
+              filterTag === f.id ? 'bg-[#A30236] text-white' : 'bg-stone-100 text-stone-600 hover:bg-stone-200'
+            }`} style={{borderRadius:'2px'}}>
+            {f.label} <span className="opacity-70 ml-0.5">{f.count}</span>
+          </button>
+        ))}
+      </div>
+
+      <div className="text-[10px] text-stone-400 mb-2 leading-relaxed">
+        实际视频文件在 {s.saveDir ? '你绑定的目录' : '系统下载文件夹'} 里 · 标签只是给你方便筛选。
+      </div>
+
+      <div className="space-y-1 max-h-72 overflow-y-auto text-xs border border-stone-200" style={{borderRadius:'3px'}}>
+        {filtered.length === 0 && (
+          <div className="text-center text-stone-400 py-6 text-[11px]">
+            {filterTag === 'all' ? '还没有录像' : '该标签下还没有录像'}
+          </div>
+        )}
+        {filtered.map((f) => {
+          const d = new Date(f.ts || Date.now());
+          const pad = (n) => String(n).padStart(2,'0');
+          const ds = `${d.getMonth()+1}/${d.getDate()} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+          const realIdx = allFiles.findIndex(x => x.filename === f.filename);
+          return (
+            <div key={f.filename} className="flex items-center gap-2 px-2 py-1.5 hover:bg-stone-50 border-b border-stone-100 last:border-0">
+              <span className={`shrink-0 text-[9px] tracking-wider font-bold px-1 py-0.5 ${
+                f.method === 'folder' ? 'bg-emerald-100 text-emerald-800' : 'bg-stone-200 text-stone-700'
+              }`} style={{borderRadius:'2px'}}>
+                {f.method === 'folder' ? '⌂ 目录' : '⬇ 下载'}
+              </span>
+              <div className="flex-1 min-w-0">
+                <div className="text-stone-700 truncate">{f.label || f.filename}</div>
+                <div className="text-stone-400 text-[10px] truncate">{ds} · {f.filename}</div>
+              </div>
+              <FileTagger filename={f.filename} compact />
+              <button onClick={() => {
+                if (window.confirm(`删除这条录像？\n\n${f.label || f.filename}\n${f.method === 'folder' ? '磁盘文件也会被删除。' : '只删除历史条目，系统下载夹里的文件保留。'}`)) {
+                  if (realIdx >= 0) s.removeSavedFile(realIdx);
+                }
+              }} className="shrink-0 text-stone-400 hover:text-red-600 text-base px-1" title="删除">🗑</button>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 };
@@ -6012,6 +6463,43 @@ const HomeView = ({ onSelect, onOpenSettings }) => {
       })()}
 
       {/* ╭─────────────────────────────╮  */}
+      {/* │   我的高光（⭐ 标记的录像）   │  */}
+      {/* ╰─────────────────────────────╯  */}
+      {(() => {
+        const stars = (settings.savedFiles || []).filter(f => f.tag === 'star').slice(0, 6);
+        if (stars.length === 0) return null;
+        return (
+          <div className="mb-6 p-4 border border-stone-200 bg-white" style={{borderRadius:'4px'}}>
+            <div className="flex items-center justify-between mb-3">
+              <div className="flex items-center gap-2">
+                <span className="w-1 h-3.5 bg-[#F1A23F]" />
+                <h3 className="font-display font-bold text-stone-900 text-[13px] m-0">⭐ 我的高光</h3>
+              </div>
+              <span className="text-[10px] text-stone-500 tabular-nums">{stars.length} 条 / 共 {(settings.savedFiles||[]).filter(f=>f.tag==='star').length}</span>
+            </div>
+            <div className="space-y-1.5">
+              {stars.map(f => {
+                const d = new Date(f.ts || 0);
+                const ds = `${d.getMonth()+1}/${d.getDate()}`;
+                return (
+                  <div key={f.filename} className="flex items-center gap-2 px-2 py-2 bg-amber-50/50 border border-amber-200" style={{borderRadius:'3px'}}>
+                    <span className="text-base shrink-0">⭐</span>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-[12px] font-medium text-stone-800 truncate">{f.label || f.filename}</div>
+                      <div className="text-[10px] text-stone-500">{ds} · {f.duration ? `${Math.round(f.duration)}s` : '—'}</div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+            <div className="text-[10px] text-stone-500 mt-2 leading-relaxed">
+              录完一条后觉得好的就点 ⭐ 标记 · 这里就是你的"作品集"，定期翻翻找感觉。
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* ╭─────────────────────────────╮  */}
       {/* │   SECTION LABEL             │  */}
       {/* ╰─────────────────────────────╯  */}
       <div className="mb-3 flex items-end justify-between">
@@ -6825,6 +7313,7 @@ const TeleprompterMode = () => {
       duration={rec.duration}
       onRetry={begin}
       onNew={reset}
+      transcript={transcript}
     />;
   }
 
@@ -7467,6 +7956,7 @@ const HostMode = () => {
       onRetry={startSession}
       onNew={reset}
       extra={transcript}
+      transcript={turns.filter(t => t.role === 'user').map(t => t.text).join('\n')}
     />;
   }
 
@@ -8896,47 +9386,7 @@ const SettingsPanel = ({ onClose }) => {
           )}
         </div>
 
-        {s.savedFiles.length > 0 && (
-          <div className="mb-6 pt-6 border-t border-stone-200">
-            <div className="flex items-center justify-between mb-2">
-              <div className="text-sm font-medium">录制历史 <span className="text-stone-400 text-xs ml-1">({s.savedFiles.length}/50)</span></div>
-              <button onClick={() => {
-                if (window.confirm(`确定清空全部 ${s.savedFiles.length} 条历史记录？\n\n如果当时保存到了目录，磁盘上的文件也会被删除。`)) {
-                  s.clearAllSavedFiles();
-                }
-              }} className="text-xs text-stone-500 hover:text-red-600">清空全部</button>
-            </div>
-            <div className="text-[10px] text-stone-400 mb-2 leading-relaxed">
-              这里只保存 metadata（文件名 + 话题 + 时间），实际视频文件在 {s.saveDir ? '你绑定的目录' : '系统下载文件夹'} 里。<br/>
-              删除条目时：⌂ 目录 → 磁盘文件同步删除；⬇ 下载 → 仅删除条目，系统下载夹文件保留。
-            </div>
-            <div className="space-y-1 max-h-64 overflow-y-auto text-xs border border-stone-200" style={{borderRadius:'3px'}}>
-              {s.savedFiles.map((f, i) => {
-                const d = new Date(f.ts || Date.now());
-                const pad = (n) => String(n).padStart(2,'0');
-                const ds = `${d.getMonth()+1}/${d.getDate()} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
-                return (
-                  <div key={i} className="flex items-center gap-2 px-2 py-1.5 hover:bg-stone-50 border-b border-stone-100 last:border-0">
-                    <span className={`shrink-0 text-[9px] tracking-wider font-bold px-1 py-0.5 ${
-                      f.method === 'folder' ? 'bg-emerald-100 text-emerald-800' : 'bg-stone-200 text-stone-700'
-                    }`} style={{borderRadius:'2px'}}>
-                      {f.method === 'folder' ? '⌂ 目录' : '⬇ 下载'}
-                    </span>
-                    <div className="flex-1 min-w-0">
-                      <div className="text-stone-700 truncate">{f.label || f.filename}</div>
-                      <div className="text-stone-400 text-[10px] truncate">{ds} · {f.filename}</div>
-                    </div>
-                    <button onClick={() => {
-                      if (window.confirm(`删除这条录像？\n\n${f.label || f.filename}\n${f.method === 'folder' ? '磁盘文件也会被删除。' : '只删除历史条目，系统下载夹里的文件保留。'}`)) {
-                        s.removeSavedFile(i);
-                      }
-                    }} className="shrink-0 text-stone-400 hover:text-red-600 text-base px-1" title="删除">🗑</button>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        )}
+        {s.savedFiles.length > 0 && <RecordingHistoryList settings={s} />}
 
         <div className="flex justify-end gap-2 pt-2">
           <Btn variant="ghost" onClick={onClose}>取消</Btn>
@@ -9071,8 +9521,17 @@ function App() {
 
   const addSavedFile = useCallback((f) => {
     setSavedFiles(prev => {
-      const entry = { ...f, ts: f.ts || Date.now() };
+      const entry = { ...f, ts: f.ts || Date.now(), tag: f.tag || null };
       const next = [entry, ...prev].slice(0, 50);
+      persistSavedFiles(next);
+      return next;
+    });
+  }, []);
+
+  // 更新单条 metadata（用于打标签 / 改备注）— 用 filename 定位，避免 idx 漂移
+  const updateSavedFile = useCallback((filename, patch) => {
+    setSavedFiles(prev => {
+      const next = prev.map(f => f.filename === filename ? { ...f, ...patch } : f);
       persistSavedFiles(next);
       return next;
     });
@@ -9111,12 +9570,12 @@ function App() {
   const isBuiltinKey = !userApiKey;
   const ctxValue = useMemo(() => ({
     apiKey, userApiKey, isBuiltinKey, setApiKey,
-    saveDir, setSaveDir, savedFiles, addSavedFile, removeSavedFile, clearAllSavedFiles,
+    saveDir, setSaveDir, savedFiles, addSavedFile, updateSavedFile, removeSavedFile, clearAllSavedFiles,
     dailyGoal, setDailyGoal,
     unlockedAchievements, markAchievementsSeen,
     lastWeeklyRecap, setLastWeeklyRecap,
     restDays, addRestDay, removeRestDay,
-  }), [apiKey, userApiKey, isBuiltinKey, setApiKey, saveDir, savedFiles, addSavedFile, removeSavedFile, clearAllSavedFiles, dailyGoal, setDailyGoal, unlockedAchievements, markAchievementsSeen, lastWeeklyRecap, setLastWeeklyRecap, restDays, addRestDay, removeRestDay]);
+  }), [apiKey, userApiKey, isBuiltinKey, setApiKey, saveDir, savedFiles, addSavedFile, updateSavedFile, removeSavedFile, clearAllSavedFiles, dailyGoal, setDailyGoal, unlockedAchievements, markAchievementsSeen, lastWeeklyRecap, setLastWeeklyRecap, restDays, addRestDay, removeRestDay]);
 
   // Mode → title for MobileHeader
   const headerSub = useMemo(() => {
