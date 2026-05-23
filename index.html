@@ -4013,7 +4013,7 @@ async function deepseekHostFollowup({ apiKey, topic, history, lastUserSaid, kind
 const SettingsContext = React.createContext({
   apiKey: '', setApiKey: () => {},
   saveDir: null, setSaveDir: () => {},
-  savedFiles: [], addSavedFile: () => {},
+  savedFiles: [], addSavedFile: () => {}, removeSavedFile: () => {}, clearAllSavedFiles: () => {},
 });
 const useSettings = () => React.useContext(SettingsContext);
 
@@ -4751,9 +4751,25 @@ const DoneView = ({ blob, contextLabel, onRetry, onNew, extra }) => {
                     {saveStatus.method === 'folder' ? '写入到你选择的目录' : '已下载到浏览器默认下载文件夹'} · {sizeMB} MB
                   </div>
                 </div>
-                {url && (
-                  <a href={url} download={saveStatus.filename} className="text-xs underline">再下载一次</a>
-                )}
+                <div className="flex flex-col items-end gap-0.5">
+                  {url && (
+                    <a href={url} download={saveStatus.filename} className="text-xs underline">再下载一次</a>
+                  )}
+                  <button onClick={() => {
+                    if (window.confirm(`删除这条录像？\n\n${contextLabel}\n${saveStatus.method === 'folder' ? '磁盘文件也会被删除。' : '只删除历史条目（系统下载夹的文件请手动删）。'}`)) {
+                      // 找到刚加进 savedFiles 的那条（filename 匹配）→ 删除
+                      const idx = settings.savedFiles.findIndex(f => f.filename === saveStatus.filename);
+                      if (idx >= 0) settings.removeSavedFile(idx);
+                      setSaveStatus({ state: 'discarded' });
+                    }
+                  }} className="text-xs text-emerald-900/70 hover:text-red-700 underline">🗑 丢掉这条</button>
+                </div>
+              </>
+            )}
+            {saveStatus.state === 'discarded' && (
+              <>
+                <span>—</span>
+                <div className="flex-1 italic">已删除这条录像</div>
               </>
             )}
             {saveStatus.state === 'error' && <>
@@ -7212,15 +7228,42 @@ const SettingsPanel = ({ onClose }) => {
 
         {s.savedFiles.length > 0 && (
           <div className="mb-6 pt-6 border-t border-stone-200">
-            <div className="text-sm font-medium mb-2">最近保存（本次会话）</div>
-            <div className="space-y-1 max-h-32 overflow-y-auto text-xs">
-              {s.savedFiles.slice(0, 10).map((f, i) => (
-                <div key={i} className="flex items-center gap-2 text-stone-600">
-                  <span className="text-emerald-700">●</span>
-                  <span className="font-mono truncate flex-1">{f.filename}</span>
-                  <span className="text-stone-400">{f.method === 'folder' ? '→ 目录' : '→ 下载'}</span>
-                </div>
-              ))}
+            <div className="flex items-center justify-between mb-2">
+              <div className="text-sm font-medium">录制历史 <span className="text-stone-400 text-xs ml-1">({s.savedFiles.length}/50)</span></div>
+              <button onClick={() => {
+                if (window.confirm(`确定清空全部 ${s.savedFiles.length} 条历史记录？\n\n如果当时保存到了目录，磁盘上的文件也会被删除。`)) {
+                  s.clearAllSavedFiles();
+                }
+              }} className="text-xs text-stone-500 hover:text-red-600">清空全部</button>
+            </div>
+            <div className="text-[10px] text-stone-400 mb-2 leading-relaxed">
+              这里只保存 metadata（文件名 + 话题 + 时间），实际视频文件在 {s.saveDir ? '你绑定的目录' : '系统下载文件夹'} 里。<br/>
+              删除条目时：⌂ 目录 → 磁盘文件同步删除；⬇ 下载 → 仅删除条目，系统下载夹文件保留。
+            </div>
+            <div className="space-y-1 max-h-64 overflow-y-auto text-xs border border-stone-200" style={{borderRadius:'3px'}}>
+              {s.savedFiles.map((f, i) => {
+                const d = new Date(f.ts || Date.now());
+                const pad = (n) => String(n).padStart(2,'0');
+                const ds = `${d.getMonth()+1}/${d.getDate()} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+                return (
+                  <div key={i} className="flex items-center gap-2 px-2 py-1.5 hover:bg-stone-50 border-b border-stone-100 last:border-0">
+                    <span className={`shrink-0 text-[9px] tracking-wider font-bold px-1 py-0.5 ${
+                      f.method === 'folder' ? 'bg-emerald-100 text-emerald-800' : 'bg-stone-200 text-stone-700'
+                    }`} style={{borderRadius:'2px'}}>
+                      {f.method === 'folder' ? '⌂ 目录' : '⬇ 下载'}
+                    </span>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-stone-700 truncate">{f.label || f.filename}</div>
+                      <div className="text-stone-400 text-[10px] truncate">{ds} · {f.filename}</div>
+                    </div>
+                    <button onClick={() => {
+                      if (window.confirm(`删除这条录像？\n\n${f.label || f.filename}\n${f.method === 'folder' ? '磁盘文件也会被删除。' : '只删除历史条目，系统下载夹里的文件保留。'}`)) {
+                        s.removeSavedFile(i);
+                      }
+                    }} className="shrink-0 text-stone-400 hover:text-red-600 text-base px-1" title="删除">🗑</button>
+                  </div>
+                );
+              })}
             </div>
           </div>
         )}
@@ -7250,7 +7293,16 @@ function App() {
     try { return localStorage.getItem('kobo.deepseekKey') || ''; } catch { return ''; }
   });
   const [saveDir, setSaveDir] = useState(null);
-  const [savedFiles, setSavedFiles] = useState([]);
+  // 保存历史：localStorage 持久化，最多 50 条
+  const [savedFiles, setSavedFiles] = useState(() => {
+    try {
+      const raw = localStorage.getItem('kobo.savedFiles');
+      if (!raw) return [];
+      const arr = JSON.parse(raw);
+      return Array.isArray(arr) ? arr.slice(0, 50) : [];
+    } catch { return []; }
+  });
+  const saveDirRef = useRef(null); // saveDir 可能 stale，用 ref 给 removeSavedFile 用
 
   // Detect "this is a phone" — Capacitor native OR viewport < 600px → fill the whole screen,
   // no fake iPhone frame (otherwise the user sees a tiny phone-in-phone view).
@@ -7274,11 +7326,57 @@ function App() {
     setApiKeyState(k);
     try { localStorage.setItem('kobo.deepseekKey', k); } catch {}
   }, []);
-  const addSavedFile = useCallback((f) => setSavedFiles(prev => [f, ...prev].slice(0, 50)), []);
+
+  // 同步 saveDir 到 ref，便于 removeSavedFile 拿到最新值（不重建回调）
+  useEffect(() => { saveDirRef.current = saveDir; }, [saveDir]);
+
+  // 持久化 savedFiles 到 localStorage
+  const persistSavedFiles = (arr) => {
+    try { localStorage.setItem('kobo.savedFiles', JSON.stringify(arr)); } catch {}
+  };
+
+  const addSavedFile = useCallback((f) => {
+    setSavedFiles(prev => {
+      const entry = { ...f, ts: f.ts || Date.now() };
+      const next = [entry, ...prev].slice(0, 50);
+      persistSavedFiles(next);
+      return next;
+    });
+  }, []);
+
+  // 删除单条：从 localStorage 移除 + 如果是 folder 保存且目录还在 → 同步删磁盘文件
+  const removeSavedFile = useCallback(async (idx) => {
+    let target = null;
+    setSavedFiles(prev => {
+      target = prev[idx];
+      const next = prev.filter((_, i) => i !== idx);
+      persistSavedFiles(next);
+      return next;
+    });
+    // 异步尝试删除磁盘文件（不阻塞 UI）
+    setTimeout(async () => {
+      if (target && target.method === 'folder' && target.filename && saveDirRef.current) {
+        try {
+          await saveDirRef.current.removeEntry(target.filename);
+        } catch (e) { /* 文件可能不存在或权限失效 */ }
+      }
+    }, 0);
+  }, []);
+
+  const clearAllSavedFiles = useCallback(async () => {
+    const toDelete = savedFiles.filter(f => f.method === 'folder');
+    setSavedFiles([]);
+    persistSavedFiles([]);
+    if (saveDirRef.current && toDelete.length) {
+      for (const f of toDelete) {
+        try { await saveDirRef.current.removeEntry(f.filename); } catch {}
+      }
+    }
+  }, [savedFiles]);
 
   const ctxValue = useMemo(() => ({
-    apiKey, setApiKey, saveDir, setSaveDir, savedFiles, addSavedFile
-  }), [apiKey, setApiKey, saveDir, savedFiles, addSavedFile]);
+    apiKey, setApiKey, saveDir, setSaveDir, savedFiles, addSavedFile, removeSavedFile, clearAllSavedFiles
+  }), [apiKey, setApiKey, saveDir, savedFiles, addSavedFile, removeSavedFile, clearAllSavedFiles]);
 
   // Mode → title for MobileHeader
   const headerSub = useMemo(() => {
