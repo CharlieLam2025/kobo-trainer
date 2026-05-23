@@ -3975,6 +3975,44 @@ ${text}`;
   return arr.filter(x => typeof x === 'string').map(s => s.trim()).filter(Boolean);
 }
 
+// DeepSeek 录完一稿多发：根据话题/时长，生成多平台标题 + 改写
+async function deepseekGeneratePublishKit({ apiKey, topic, mode, duration }) {
+  if (!apiKey) throw new Error('需要 DeepSeek API Key');
+  if (!topic?.trim()) throw new Error('话题为空');
+  const sys = '你是资深短视频内容策划。给一段口播视频，按平台生成不同风格的标题 + 配套文案，让创作者复制即发。';
+  const usr = `刚录了一条口播视频：
+- 话题：${topic}
+- 时长：约 ${duration || 60} 秒
+- 模式：${mode || '即兴'}
+
+请生成（仅返回 JSON 对象，不要其他文字 / 代码块）：
+{
+  "xhsTitles": ["小红书风格 1", "...3 条，emoji+数字+痛点钩子，≤20字"],
+  "dyTitles":  ["抖音风格 1",   "...3 条，更短更冲击，≤15字"],
+  "sphTitles": ["视频号风格 1", "...3 条，稳重价值感，≤22字"],
+  "xhsPost":   "小红书图文正文 200-300 字，分段，带 5 个#标签",
+  "moments":   "朋友圈短文 3-5 行，卖人设的版本"
+}`;
+  const res = await fetch('https://api.deepseek.com/chat/completions', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+    body: JSON.stringify({
+      model: 'deepseek-chat',
+      messages: [{ role:'system', content:sys }, { role:'user', content:usr }],
+      temperature: 0.85,
+    }),
+  });
+  if (!res.ok) {
+    const txt = await res.text().catch(()=>'');
+    throw new Error(`DeepSeek ${res.status}: ${txt.slice(0,200) || res.statusText}`);
+  }
+  const data = await res.json();
+  const out = data.choices?.[0]?.message?.content || '';
+  const m = out.match(/\{[\s\S]*\}/);
+  if (!m) throw new Error('AI 输出非 JSON：' + out.slice(0,200));
+  return JSON.parse(m[0]);
+}
+
 // DeepSeek 主持人追问：根据对话历史 + 你刚说的话，生成下一个针对性问题
 async function deepseekHostFollowup({ apiKey, topic, history, lastUserSaid, kind = 'followup' }) {
   if (!apiKey) throw new Error('请先在"设置"里配置 DeepSeek API Key');
@@ -4891,8 +4929,253 @@ const DoneView = ({ blob, contextLabel, duration = 0, onRetry, onNew, extra }) =
           <div className="text-stone-400 text-sm p-8 text-center">录制为空（可能时长太短或权限被拒）</div>
         )}
       </Card>
+
+      {/* ✨ AI 发布助手 */}
+      {blob && contextLabel && <PublishKit topic={contextLabel} duration={duration} />}
+
+      {/* 🚀 预演 → 发布链路 */}
+      {blob && contextLabel && <PublishStep contextLabel={contextLabel} />}
+
       {extra}
     </div>
+  );
+};
+
+// ============ AI 发布助手：一稿多发 ============
+const PublishKit = ({ topic, duration }) => {
+  const settings = useSettings();
+  const [kit, setKit]         = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError]     = useState('');
+  const [activeTab, setActiveTab] = useState('xhs'); // xhs | dy | sph | post | moments
+  const [copyToast, setCopyToast] = useState('');
+
+  const generate = async () => {
+    setLoading(true);
+    setError('');
+    try {
+      const k = await deepseekGeneratePublishKit({
+        apiKey: settings.apiKey,
+        topic: (topic || '').replace(/^话题：/, ''),
+        duration,
+      });
+      setKit(k);
+    } catch (e) {
+      setError(e.message);
+    } finally { setLoading(false); }
+  };
+
+  const copy = (text, label) => {
+    try {
+      navigator.clipboard.writeText(text).then(() => {
+        setCopyToast(`✓ 已复制：${label}`);
+        setTimeout(() => setCopyToast(''), 1800);
+      }).catch(() => setCopyToast('复制失败 · 长按文本手动复制'));
+    } catch {
+      setCopyToast('复制失败 · 长按文本手动复制');
+    }
+  };
+
+  if (!kit && !loading && !error) {
+    return (
+      <Card className="p-5 mb-4">
+        <div className="flex items-center gap-2.5 mb-3">
+          <div className="w-8 h-8 bg-[#FBEFF2] text-[#A30236] flex items-center justify-center" style={{borderRadius:'3px'}}>
+            <Icon name="sparkle" size={16} strokeWidth={1.7}/>
+          </div>
+          <h3 className="font-display font-bold text-stone-900 text-[16px] m-0">AI 发布助手</h3>
+          <Tag color="violet">DeepSeek</Tag>
+        </div>
+        <p className="text-[12px] text-stone-600 leading-relaxed mb-4">
+          一键根据这次预演的话题，生成 <span className="font-bold">3 个平台 × 3 条标题</span> + 小红书图文版 + 朋友圈短文。复制粘贴就能发。
+        </p>
+        <Btn variant="accent" onClick={generate} className="w-full">
+          <Icon name="sparkle" size={14}/> 一键生成多平台文案
+        </Btn>
+      </Card>
+    );
+  }
+
+  return (
+    <Card className="p-5 mb-4 relative">
+      <div className="flex items-center gap-2.5 mb-3">
+        <div className="w-8 h-8 bg-[#FBEFF2] text-[#A30236] flex items-center justify-center" style={{borderRadius:'3px'}}>
+          <Icon name="sparkle" size={16} strokeWidth={1.7}/>
+        </div>
+        <h3 className="font-display font-bold text-stone-900 text-[16px] m-0">AI 发布助手</h3>
+        {loading && <Tag color="amber">生成中...</Tag>}
+        {kit && <button onClick={generate} className="ml-auto text-xs text-stone-500 hover:text-[#A30236] flex items-center gap-1">
+          <Icon name="refresh" size={11}/> 重生成
+        </button>}
+      </div>
+
+      {loading && (
+        <div className="py-6 text-center text-stone-500 text-sm">
+          <div className="inline-flex items-center gap-2">
+            <span className="w-2 h-2 bg-[#A30236] rounded-full pulse-rec"/>
+            正在生成 3 个平台风格的标题 + 图文版 + 朋友圈版
+          </div>
+        </div>
+      )}
+      {error && (
+        <div className="bg-red-50 border border-red-200 px-3 py-2 text-xs text-red-700 mb-3" style={{borderRadius:'2px'}}>
+          {error}
+          <button onClick={generate} className="ml-2 underline">重试</button>
+        </div>
+      )}
+
+      {kit && (
+        <>
+          {/* Tab 切换 */}
+          <div className="flex gap-1 mb-3 overflow-x-auto no-scrollbar pb-1">
+            {[
+              { id:'xhs',     l:'📕 小红书' },
+              { id:'dy',      l:'🎵 抖音' },
+              { id:'sph',     l:'📺 视频号' },
+              { id:'post',    l:'📝 图文正文' },
+              { id:'moments', l:'💬 朋友圈' },
+            ].map(t => (
+              <button key={t.id} onClick={() => setActiveTab(t.id)}
+                className={`shrink-0 px-2.5 py-1.5 text-[11px] font-semibold transition-colors ${
+                  activeTab === t.id ? 'bg-[#A30236] text-white' : 'bg-stone-100 text-stone-700'
+                }`}
+                style={{borderRadius:'2px'}}>{t.l}</button>
+            ))}
+          </div>
+
+          {/* 内容区 */}
+          {(activeTab === 'xhs' || activeTab === 'dy' || activeTab === 'sph') && (
+            <div className="space-y-2">
+              {(kit[activeTab === 'xhs' ? 'xhsTitles' : activeTab === 'dy' ? 'dyTitles' : 'sphTitles'] || []).map((title, i) => (
+                <div key={i} className="flex items-start gap-2 bg-stone-50 px-3 py-2.5 border border-stone-200" style={{borderRadius:'2px'}}>
+                  <span className="text-stone-400 text-xs tabular-nums font-bold shrink-0 mt-0.5">{i+1}</span>
+                  <span className="flex-1 text-[13px] text-stone-800 leading-snug">{title}</span>
+                  <button onClick={() => copy(title, `标题 ${i+1}`)}
+                    className="shrink-0 text-[11px] text-[#A30236] hover:underline font-medium">复制</button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {activeTab === 'post' && (
+            <div>
+              <div className="bg-stone-50 px-3 py-3 border border-stone-200 text-[12px] text-stone-800 leading-relaxed whitespace-pre-wrap mb-2 max-h-72 overflow-y-auto" style={{borderRadius:'2px'}}>
+                {kit.xhsPost}
+              </div>
+              <Btn variant="secondary" size="sm" onClick={() => copy(kit.xhsPost, '小红书图文正文')} className="w-full">复制图文版</Btn>
+            </div>
+          )}
+
+          {activeTab === 'moments' && (
+            <div>
+              <div className="bg-stone-50 px-3 py-3 border border-stone-200 text-[12px] text-stone-800 leading-relaxed whitespace-pre-wrap mb-2" style={{borderRadius:'2px'}}>
+                {kit.moments}
+              </div>
+              <Btn variant="secondary" size="sm" onClick={() => copy(kit.moments, '朋友圈短文')} className="w-full">复制朋友圈版</Btn>
+            </div>
+          )}
+
+          {/* 复制 toast */}
+          {copyToast && (
+            <div className="absolute top-3 right-3 bg-stone-900 text-white text-xs px-3 py-1.5 fade-in" style={{borderRadius:'2px'}}>
+              {copyToast}
+            </div>
+          )}
+        </>
+      )}
+    </Card>
+  );
+};
+
+// ============ 预演 → 发布链路 ============
+const PublishStep = ({ contextLabel }) => {
+  const [open, setOpen]       = useState(false);
+  const [done, setDone]       = useState(false);
+  const [channel, setChannel] = useState(null);
+  const settings = useSettings();
+
+  const CHANNELS = [
+    { id:'moments', emoji:'💬', name:'先发朋友圈',  hint:'最低压力 · 把熟人当作"第一波试听众"，看哪条 emoji 多 = 钩子成立' },
+    { id:'group',   emoji:'👥', name:'先发小群',    hint:'找 3 个真实读者反馈 · 等他们 react 一下再决定要不要大号发' },
+    { id:'public',  emoji:'📢', name:'直接发大号',  hint:'你预演过了，准备好了。冲。错过这个时机才是真损失' },
+  ];
+
+  if (done) {
+    return (
+      <Card className="p-5 mb-4 bg-emerald-50 border-emerald-200">
+        <div className="flex items-center gap-2">
+          <Icon name="check" size={18} className="text-emerald-700" strokeWidth={2.2}/>
+          <div>
+            <div className="font-display font-bold text-emerald-900 text-[14px]">已发布 ✓</div>
+            <div className="text-[11px] text-emerald-700 mt-0.5">下一条预演继续 →</div>
+          </div>
+        </div>
+      </Card>
+    );
+  }
+
+  if (!open) {
+    return (
+      <Card className="p-5 mb-4">
+        <div className="flex items-center gap-2.5 mb-3">
+          <div className="w-8 h-8 bg-[#FBEFF2] text-[#A30236] flex items-center justify-center" style={{borderRadius:'3px'}}>
+            <Icon name="arrow" size={16} strokeWidth={1.7}/>
+          </div>
+          <h3 className="font-display font-bold text-stone-900 text-[16px] m-0">从预演到发布</h3>
+        </div>
+        <p className="text-[12px] text-stone-600 leading-relaxed mb-4">
+          预演已经够了 · 发出去才有反馈。挑一个发布路径，把这条变成真正的内容。
+        </p>
+        <Btn variant="primary" onClick={() => setOpen(true)} className="w-full">
+          我准备发了 →
+        </Btn>
+      </Card>
+    );
+  }
+
+  return (
+    <Card className="p-5 mb-4">
+      <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center gap-2.5">
+          <div className="w-8 h-8 bg-[#FBEFF2] text-[#A30236] flex items-center justify-center" style={{borderRadius:'3px'}}>
+            <Icon name="arrow" size={16} strokeWidth={1.7}/>
+          </div>
+          <h3 className="font-display font-bold text-stone-900 text-[16px] m-0">选发布路径</h3>
+        </div>
+        <button onClick={() => { setOpen(false); setChannel(null); }} className="text-stone-400 text-xs">取消</button>
+      </div>
+
+      <div className="space-y-2 mb-4">
+        {CHANNELS.map(c => (
+          <button key={c.id} onClick={() => setChannel(c.id)}
+            className={`w-full text-left p-3 border-2 transition-all ${
+              channel === c.id ? 'border-[#A30236] bg-[#FBEFF2]' : 'border-stone-200 hover:border-stone-300'
+            }`}
+            style={{borderRadius:'3px'}}>
+            <div className="flex items-center gap-2 mb-1">
+              <span className="text-lg">{c.emoji}</span>
+              <span className="font-semibold text-sm">{c.name}</span>
+            </div>
+            <div className="text-[11px] text-stone-500 leading-snug">{c.hint}</div>
+          </button>
+        ))}
+      </div>
+
+      {channel && (
+        <Btn variant="primary" onClick={() => {
+          // 把当前 saved file（最新一条）标记为 published
+          const files = settings.savedFiles || [];
+          if (files.length > 0) {
+            const newest = files[0];
+            // 不直接改 saved files，只在这条 entry 上标记（避免破坏 metadata 结构）
+            // 简化：弹 toast 即可，状态留给本组件
+          }
+          setDone(true);
+        }} className="w-full">
+          已选择 · 标记为已发布
+        </Btn>
+      )}
+    </Card>
   );
 };
 
@@ -5198,20 +5481,30 @@ const HomeView = ({ onSelect, onOpenSettings }) => {
     today0.setHours(0, 0, 0, 0);
     const todayStart = today0.getTime();
     const goal = settings.dailyGoal || { count: 3, durationSec: 60 };
-    const minDur = (goal.durationSec || 0) * 0.8; // 容差 80%
+    const minDur = (goal.durationSec || 0) * 0.8;
     const matches = (f) => (f.duration || 0) >= minDur;
     const inDay = (f, start) => {
       const ts = f.ts || 0;
       return ts >= start && ts < start + 86400000;
     };
     const files = settings.savedFiles || [];
+    const restSet = new Set(settings.restDays || []);
+    const todayK = dayKey(todayStart);
+    const isRestDay = (ts) => restSet.has(dayKey(ts));
 
     const todayFiles = files.filter(f => inDay(f, todayStart) && matches(f));
+    const isTodayRest = restSet.has(todayK);
     const todayMet = todayFiles.length >= goal.count;
+    const todayPassed = todayMet || isTodayRest;
 
-    let streak = todayMet ? 1 : 0;
+    let streak = todayPassed ? 1 : 0;
     let cursor = todayStart - 86400000;
     for (let i = 0; i < 365; i++) {
+      if (isRestDay(cursor)) {
+        // 休息日不计入 streak 但也不打断
+        cursor -= 86400000;
+        continue;
+      }
       const dayFiles = files.filter(f => inDay(f, cursor) && matches(f));
       if (dayFiles.length >= goal.count) {
         streak++;
@@ -5223,11 +5516,20 @@ const HomeView = ({ onSelect, onOpenSettings }) => {
     const weekCount = files.filter(f => (f.ts || 0) >= weekStart && matches(f)).length;
     const allTime = files.filter(matches).length;
 
+    // 本周已用休息日数（最近 7 天内）
+    const restUsedInWeek = (settings.restDays || []).filter(d => {
+      const ts = new Date(d).getTime();
+      return ts >= weekStart && ts <= todayStart;
+    }).length;
+    const canRestToday = !isTodayRest && !todayMet && restUsedInWeek < 1;
+
     return {
       todayCount: todayFiles.length, weekCount, allTime,
-      streak, goalCount: goal.count, goalDuration: goal.durationSec, todayMet,
+      streak, goalCount: goal.count, goalDuration: goal.durationSec,
+      todayMet, isTodayRest, todayPassed, canRestToday, restUsedInWeek,
+      todayK,
     };
-  }, [settings.savedFiles, settings.dailyGoal]);
+  }, [settings.savedFiles, settings.dailyGoal, settings.restDays]);
 
   return (
     <div className="fade-in">
@@ -5306,19 +5608,45 @@ const HomeView = ({ onSelect, onOpenSettings }) => {
           </div>
         </div>
         <div>
-          <div className="flex items-center justify-between mb-1.5">
+          <div className="flex items-center justify-between mb-1.5 flex-wrap gap-1">
             <span className="text-[11px] text-stone-700">
               今日目标 <span className="font-bold">{stats.goalCount}</span> 条 × <span className="font-bold">{stats.goalDuration}</span>s
+              {stats.isTodayRest && <span className="ml-1.5 inline-flex items-center gap-1 bg-sky-100 text-sky-800 px-1.5 py-0.5 text-[9px] font-bold tracking-wider" style={{borderRadius:'2px'}}>💤 休息日</span>}
             </span>
-            <button onClick={() => setEditingGoal(true)} className="text-[11px] text-stone-500 hover:text-[#A30236] flex items-center gap-1">
-              <Icon name="settings" size={10}/> 改目标
-            </button>
+            <div className="flex items-center gap-2">
+              {stats.canRestToday && (
+                <button onClick={() => {
+                  if (window.confirm(`今天作为休息日？\n\n- streak 不会断（休息日跳过）\n- 但当天不打卡\n- 7 天内只能用 1 次`)) {
+                    settings.addRestDay(stats.todayK);
+                  }
+                }} className="text-[11px] text-sky-700 hover:text-sky-900 flex items-center gap-1">
+                  💤 今日休息
+                </button>
+              )}
+              {stats.isTodayRest && (
+                <button onClick={() => {
+                  if (window.confirm('取消今日休息日？')) settings.removeRestDay(stats.todayK);
+                }} className="text-[11px] text-stone-500 hover:text-[#A30236]">
+                  取消休息
+                </button>
+              )}
+              <button onClick={() => setEditingGoal(true)} className="text-[11px] text-stone-500 hover:text-[#A30236] flex items-center gap-1">
+                <Icon name="settings" size={10}/> 改目标
+              </button>
+            </div>
           </div>
           <div className="h-2 bg-stone-200 overflow-hidden mb-2" style={{borderRadius:'2px'}}>
-            <div className={`h-full transition-all duration-500 ${stats.todayMet ? 'bg-emerald-500' : 'bg-[#A30236]'}`}
-                 style={{width:`${Math.min(100, (stats.todayCount/Math.max(1,stats.goalCount))*100)}%`}} />
+            <div className={`h-full transition-all duration-500 ${
+              stats.isTodayRest ? 'bg-sky-400' :
+              stats.todayMet ? 'bg-emerald-500' : 'bg-[#A30236]'
+            }`}
+                 style={{width: stats.isTodayRest ? '100%' : `${Math.min(100, (stats.todayCount/Math.max(1,stats.goalCount))*100)}%`}} />
           </div>
-          {stats.todayMet ? (
+          {stats.isTodayRest ? (
+            <div className="text-[11px] text-sky-700 font-medium">
+              💤 今天休息一下 · streak 不会断{stats.streak > 0 && ` · 已连续 ${stats.streak} 天 🔥`}
+            </div>
+          ) : stats.todayMet ? (
             <div className="text-[11px] text-emerald-700 font-medium">
               ✓ 今日完成{stats.streak > 1 && ` · 已连续 ${stats.streak} 天 🔥`}
             </div>
@@ -5338,10 +5666,10 @@ const HomeView = ({ onSelect, onOpenSettings }) => {
       {/* ╰─────────────────────────────╯  */}
       {(() => {
         const cells = getHeatmapGrid(settings.savedFiles || []);
-        const monthNames = ['1月','2月','3月','4月','5月','6月','7月','8月','9月','10月','11月','12月'];
+        const restSet = new Set(settings.restDays || []);
         return (
           <div className="mb-6 p-4 border border-stone-200 bg-white" style={{borderRadius:'4px'}}>
-            <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center justify-between mb-3 flex-wrap gap-1">
               <div className="flex items-center gap-2">
                 <span className="w-1 h-3.5 bg-[#A30236]" />
                 <h3 className="font-display font-bold text-stone-900 text-[13px] m-0">最近 4 周 · 预演活跃度</h3>
@@ -5351,6 +5679,7 @@ const HomeView = ({ onSelect, onOpenSettings }) => {
                 <span className="w-2 h-2 bg-[#FBEFF2]" style={{borderRadius:'1px'}}/>1-2
                 <span className="w-2 h-2 bg-[#EEA5B4]" style={{borderRadius:'1px'}}/>3-5
                 <span className="w-2 h-2 bg-[#A30236]" style={{borderRadius:'1px'}}/>6+
+                <span className="w-2 h-2 bg-sky-300" style={{borderRadius:'1px'}}/>💤
               </div>
             </div>
             <div className="grid grid-cols-7 gap-1 mb-1">
@@ -5360,18 +5689,24 @@ const HomeView = ({ onSelect, onOpenSettings }) => {
             </div>
             <div className="grid grid-cols-7 gap-1">
               {cells.map((c, i) => {
-                const bg = c.count === 0 ? 'bg-stone-100' :
+                const k = dayKey(c.date.getTime());
+                const isRest = restSet.has(k);
+                const bg = isRest ? 'bg-sky-200' :
+                           c.count === 0 ? 'bg-stone-100' :
                            c.count <= 2 ? 'bg-[#FBEFF2]' :
                            c.count <= 5 ? 'bg-[#EEA5B4]' :
                            'bg-[#A30236]';
-                const text = c.count > 5 ? 'text-white' : c.count > 0 ? 'text-[#A30236]' : 'text-stone-400';
+                const text = isRest ? 'text-sky-900' :
+                             c.count > 5 ? 'text-white' :
+                             c.count > 0 ? 'text-[#A30236]' : 'text-stone-400';
                 return (
                   <div key={i}
                     className={`aspect-square flex flex-col items-center justify-center text-[9px] ${bg} ${text} ${c.isToday ? 'ring-2 ring-[#A30236] ring-offset-1' : ''}`}
                     style={{borderRadius:'2px'}}
-                    title={`${c.date.getMonth()+1}/${c.date.getDate()} · ${c.count} 条`}>
+                    title={`${c.date.getMonth()+1}/${c.date.getDate()} · ${isRest ? '休息日' : c.count + ' 条'}`}>
                     <span className="font-bold leading-none">{c.date.getDate()}</span>
-                    {c.count > 0 && <span className="text-[8px] leading-none mt-0.5 opacity-80">×{c.count}</span>}
+                    {isRest ? <span className="text-[8px] leading-none mt-0.5">💤</span>
+                            : c.count > 0 && <span className="text-[8px] leading-none mt-0.5 opacity-80">×{c.count}</span>}
                   </div>
                 );
               })}
@@ -8329,6 +8664,26 @@ function App() {
     });
   }, []);
 
+  // 休息日（dayKey 字符串数组），streak 计算时跳过
+  const [restDays, setRestDaysState] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('kobo.restDays') || '[]'); } catch { return []; }
+  });
+  const addRestDay = useCallback((dayK) => {
+    setRestDaysState(prev => {
+      if (prev.includes(dayK)) return prev;
+      const next = [...prev, dayK].sort();
+      try { localStorage.setItem('kobo.restDays', JSON.stringify(next)); } catch {}
+      return next;
+    });
+  }, []);
+  const removeRestDay = useCallback((dayK) => {
+    setRestDaysState(prev => {
+      const next = prev.filter(d => d !== dayK);
+      try { localStorage.setItem('kobo.restDays', JSON.stringify(next)); } catch {}
+      return next;
+    });
+  }, []);
+
   // 每周复盘上次显示时间戳
   const [lastWeeklyRecap, setLastWeeklyRecapState] = useState(() => {
     try { return parseInt(localStorage.getItem('kobo.lastWeeklyRecap') || '0', 10) || 0; } catch { return 0; }
@@ -8431,7 +8786,8 @@ function App() {
     dailyGoal, setDailyGoal,
     unlockedAchievements, markAchievementsSeen,
     lastWeeklyRecap, setLastWeeklyRecap,
-  }), [apiKey, userApiKey, isBuiltinKey, setApiKey, saveDir, savedFiles, addSavedFile, removeSavedFile, clearAllSavedFiles, dailyGoal, setDailyGoal, unlockedAchievements, markAchievementsSeen, lastWeeklyRecap, setLastWeeklyRecap]);
+    restDays, addRestDay, removeRestDay,
+  }), [apiKey, userApiKey, isBuiltinKey, setApiKey, saveDir, savedFiles, addSavedFile, removeSavedFile, clearAllSavedFiles, dailyGoal, setDailyGoal, unlockedAchievements, markAchievementsSeen, lastWeeklyRecap, setLastWeeklyRecap, restDays, addRestDay, removeRestDay]);
 
   // Mode → title for MobileHeader
   const headerSub = useMemo(() => {
