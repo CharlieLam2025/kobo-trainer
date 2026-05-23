@@ -4023,6 +4023,8 @@ const SettingsContext = React.createContext({
   saveDir: null, setSaveDir: () => {},
   savedFiles: [], addSavedFile: () => {}, removeSavedFile: () => {}, clearAllSavedFiles: () => {},
   dailyGoal: { count: 3, durationSec: 60 }, setDailyGoal: () => {},
+  unlockedAchievements: [], markAchievementsSeen: () => {},
+  lastWeeklyRecap: 0, setLastWeeklyRecap: () => {},
 });
 const useSettings = () => React.useContext(SettingsContext);
 
@@ -4729,12 +4731,106 @@ const DoneView = ({ blob, contextLabel, duration = 0, onRetry, onNew, extra }) =
 
   const sizeMB = blob ? (blob.size / 1024 / 1024).toFixed(1) : null;
 
+  // 录完即时反馈：今日进度 + 连续天数 + 是否解锁新成就
+  // 注意：savedFiles 包含刚加进去的这一条
+  const feedbackStats = useMemo(() => {
+    const today0 = startOfDay(new Date());
+    const goal = settings.dailyGoal || { count: 3, durationSec: 60 };
+    const minDur = (goal.durationSec || 0) * 0.8;
+    const files = settings.savedFiles || [];
+    const todayQualifying = files.filter(f =>
+      (f.ts || 0) >= today0 && (f.ts || 0) < today0 + 86400000 && (f.duration || 0) >= minDur
+    ).length;
+    let streak = todayQualifying >= goal.count ? 1 : 0;
+    let cursor = today0 - 86400000;
+    for (let i = 0; i < 365; i++) {
+      const c = files.filter(f =>
+        (f.ts || 0) >= cursor && (f.ts || 0) < cursor + 86400000 && (f.duration || 0) >= minDur
+      ).length;
+      if (c >= goal.count) { streak++; cursor -= 86400000; } else break;
+    }
+    const justHitGoal = todayQualifying === goal.count;
+    const unlocked = ACHIEVEMENTS.filter(a => {
+      try { return a.test(files, streak); } catch { return false; }
+    }).map(a => a.id);
+    const newlyUnlocked = detectNewlyUnlocked(settings.unlockedAchievements, unlocked)
+      .map(id => ACHIEVEMENTS.find(a => a.id === id))
+      .filter(Boolean);
+    return {
+      todayCount: todayQualifying, goalCount: goal.count, streak,
+      justHitGoal, newlyUnlocked, remaining: Math.max(0, goal.count - todayQualifying),
+      qualified: (duration || 0) >= minDur,
+    };
+  }, [settings.savedFiles, settings.dailyGoal, settings.unlockedAchievements, duration]);
+
+  // 标记新成就为已见
+  useEffect(() => {
+    if (feedbackStats.newlyUnlocked.length > 0) {
+      const ids = feedbackStats.newlyUnlocked.map(a => a.id);
+      setTimeout(() => settings.markAchievementsSeen(ids), 2000);
+    }
+    // eslint-disable-next-line
+  }, [feedbackStats.newlyUnlocked.length]);
+
   return (
     <div className="fade-in">
+      {/* 即时反馈：+1 预演 + 进度 + 新成就 */}
+      {blob && (
+        <Card className="mb-4 overflow-hidden border-0" style={{background: feedbackStats.justHitGoal ? 'linear-gradient(135deg, #10b981 0%, #059669 100%)' : 'linear-gradient(135deg, #A30236 0%, #8E0230 100%)', color: '#fff'}}>
+          <div className="p-5">
+            <div className="flex items-baseline justify-between mb-3">
+              <div className="flex items-baseline gap-2">
+                <span className="text-[11px] tracking-[0.22em] uppercase font-bold text-white/80">
+                  {feedbackStats.justHitGoal ? '🎯 今日打卡完成' : '✓ 预演 +1'}
+                </span>
+                {feedbackStats.qualified
+                  ? <span className="text-[10px] tracking-wider text-white/60">已记入今日打卡</span>
+                  : <span className="text-[10px] tracking-wider text-white/60">未到目标时长 · 不计入打卡</span>}
+              </div>
+              {feedbackStats.streak > 0 && (
+                <div className="text-[11px] text-white/90 font-bold">🔥 连续 {feedbackStats.streak} 天</div>
+              )}
+            </div>
+            <div className="font-display font-bold text-2xl leading-tight mb-3">
+              {feedbackStats.justHitGoal
+                ? '今天的预演任务完成了 🎉'
+                : feedbackStats.remaining > 0
+                  ? `再来 ${feedbackStats.remaining} 条 · 达成今日目标`
+                  : '加油，今天已经在进步'}
+            </div>
+            {/* 今日进度条 */}
+            <div className="h-1.5 bg-white/20 mb-1.5" style={{borderRadius:'1px'}}>
+              <div className="h-full bg-white transition-all duration-700" style={{width: `${Math.min(100, (feedbackStats.todayCount/Math.max(1,feedbackStats.goalCount))*100)}%`}}/>
+            </div>
+            <div className="text-[10px] text-white/70 tabular-nums">
+              今日 {feedbackStats.todayCount} / {feedbackStats.goalCount}
+            </div>
+
+            {/* 新解锁徽章 */}
+            {feedbackStats.newlyUnlocked.length > 0 && (
+              <div className="mt-4 pt-4 border-t border-white/20">
+                <div className="text-[10px] tracking-[0.22em] uppercase font-bold text-amber-200 mb-2">🎉 新解锁徽章</div>
+                <div className="flex gap-2 flex-wrap">
+                  {feedbackStats.newlyUnlocked.map(a => (
+                    <div key={a.id} className="bg-white/15 backdrop-blur px-3 py-2 flex items-center gap-2" style={{borderRadius:'3px'}}>
+                      <span className="text-xl">{a.emoji}</span>
+                      <div>
+                        <div className="text-[12px] font-bold leading-none">{a.name}</div>
+                        <div className="text-[9px] text-white/70 mt-0.5">{a.desc}</div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        </Card>
+      )}
+
       <Card className="p-6 mb-4">
         <div className="flex items-center justify-between mb-4 flex-wrap gap-3">
           <div>
-            <h3 className="font-bold text-lg">录制完成 ✓</h3>
+            <h3 className="font-bold text-lg">预演完成 ✓</h3>
             <p className="text-sm text-stone-500 mt-0.5">{contextLabel}</p>
           </div>
           <div className="flex gap-2">
@@ -4887,6 +4983,74 @@ const PageHeader = ({ no, title, desc, iconName, right }) => (
 );
 
 // ============ Home View ============
+// ===== 成就系统 =====
+// 用日期对文件分组的工具
+const startOfDay = (d) => { const x = new Date(d); x.setHours(0,0,0,0); return x.getTime(); };
+const dayKey = (ts) => {
+  const d = new Date(ts || 0);
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+};
+const groupByDay = (files) => {
+  const m = {};
+  files.forEach(f => { const k = dayKey(f.ts); m[k] = (m[k]||0) + 1; });
+  return m;
+};
+const maxPerDay = (files) => Math.max(0, ...Object.values(groupByDay(files)));
+const totalUniqueDays = (files) => Object.keys(groupByDay(files)).length;
+
+// 测试函数：参数 (files, streak)
+const ACHIEVEMENTS = [
+  { id:'first',        emoji:'🎬', name:'破冰',         desc:'录下第一条预演',         test:(f)=>f.length>=1 },
+  { id:'first_minute', emoji:'⏱',  name:'破冰一分钟',   desc:'第一次录到 60 秒',       test:(f)=>f.some(x=>(x.duration||0)>=60) },
+  { id:'first_3min',   emoji:'📜', name:'长篇大论',     desc:'单条录到 3 分钟',        test:(f)=>f.some(x=>(x.duration||0)>=180) },
+  { id:'streak3',      emoji:'🔥', name:'连续 3 天',    desc:'连续 3 天达成目标',      test:(_,s)=>s>=3 },
+  { id:'streak7',      emoji:'⭐', name:'连续 7 天',    desc:'坚持一周',               test:(_,s)=>s>=7 },
+  { id:'streak14',     emoji:'🌟', name:'连续 14 天',   desc:'坚持两周',               test:(_,s)=>s>=14 },
+  { id:'streak30',     emoji:'👑', name:'连续 30 天',   desc:'连续一个月',             test:(_,s)=>s>=30 },
+  { id:'streak100',    emoji:'💎', name:'连续 100 天',  desc:'当之无愧的坚持者',       test:(_,s)=>s>=100 },
+  { id:'total10',      emoji:'📿', name:'录满 10 条',   desc:'10 次开口的勇气',        test:(f)=>f.length>=10 },
+  { id:'total50',      emoji:'🏅', name:'录满 50 条',   desc:'量变正在积累',           test:(f)=>f.length>=50 },
+  { id:'total100',     emoji:'🏆', name:'录满 100 条',  desc:'已经是高频自媒体人',     test:(f)=>f.length>=100 },
+  { id:'total500',     emoji:'🥇', name:'录满 500 条',  desc:'你已是创作机器',         test:(f)=>f.length>=500 },
+  { id:'sprint5',      emoji:'⚡', name:'单日冲刺 5',   desc:'一天录满 5 条',          test:(f)=>maxPerDay(f)>=5 },
+  { id:'sprint10',     emoji:'🚀', name:'单日狂飙 10',  desc:'一天录满 10 条',         test:(f)=>maxPerDay(f)>=10 },
+  { id:'early_bird',   emoji:'🐣', name:'早起鸟',       desc:'早 7 点前录过一条',      test:(f)=>f.some(x=>new Date(x.ts||0).getHours()<7 && (x.ts||0)>0) },
+  { id:'night_owl',    emoji:'🦉', name:'夜猫子',       desc:'凌晨 1-5 点录过一条',     test:(f)=>f.some(x=>{const h=new Date(x.ts||0).getHours(); return h>=1 && h<5;}) },
+  { id:'days30',       emoji:'📆', name:'活跃 30 天',   desc:'累计 30 个不同日子有录',  test:(f)=>totalUniqueDays(f)>=30 },
+];
+
+// 检测从 prev → next 新解锁的 ID
+const detectNewlyUnlocked = (prevUnlocked, currentUnlocked) => {
+  const prevSet = new Set(prevUnlocked || []);
+  return currentUnlocked.filter(id => !prevSet.has(id));
+};
+
+// 月历热力图：返回 28 天（4 周 × 7 天）的格子
+const getHeatmapGrid = (files) => {
+  const today = new Date();
+  today.setHours(0,0,0,0);
+  const dow = today.getDay(); // 0=Sun
+  const totalCells = 28;
+  // 起点：(totalCells - 1 - 当前到周末的差) 天前的周日
+  // 简化：往前 27 天，从那天开始
+  const start = new Date(today);
+  start.setDate(start.getDate() - (totalCells - 1));
+  const byDay = groupByDay(files);
+  const cells = [];
+  for (let i = 0; i < totalCells; i++) {
+    const d = new Date(start);
+    d.setDate(start.getDate() + i);
+    const key = dayKey(d.getTime());
+    cells.push({
+      date: d,
+      count: byDay[key] || 0,
+      isToday: d.getTime() === today.getTime(),
+      isFuture: d.getTime() > today.getTime(),
+    });
+  }
+  return cells;
+};
+
 // 打卡目标编辑器
 const GoalEditor = ({ goal, onSave, onClose }) => {
   const [count, setCount] = useState(goal.count);
@@ -4939,6 +5103,60 @@ const GoalEditor = ({ goal, onSave, onClose }) => {
   );
 };
 
+// 每周复盘
+const WeeklyRecapModal = ({ onClose, files }) => {
+  const stats = useMemo(() => {
+    const today0 = startOfDay(new Date());
+    const thisWeekStart = today0 - 6 * 86400000; // 包含今天往前 7 天
+    const lastWeekStart = thisWeekStart - 7 * 86400000;
+    const thisWeek = files.filter(f => (f.ts||0) >= thisWeekStart && (f.ts||0) < thisWeekStart + 7*86400000).length;
+    const lastWeek = files.filter(f => (f.ts||0) >= lastWeekStart && (f.ts||0) < lastWeekStart + 7*86400000).length;
+    const activeDays = new Set(files.filter(f => (f.ts||0) >= thisWeekStart).map(f => dayKey(f.ts))).size;
+    const r1 = new Date(thisWeekStart), r2 = new Date(today0);
+    const weekRange = `${r1.getMonth()+1}/${r1.getDate()} — ${r2.getMonth()+1}/${r2.getDate()}`;
+    return {
+      thisWeek, lastWeek, diff: thisWeek - lastWeek,
+      activeDaysThisWeek: activeDays, allTime: files.length,
+      weekRange,
+    };
+  }, [files]);
+
+  return (
+    <div className="absolute inset-0 z-[80] bg-stone-950/70 flex items-center justify-center px-5" onClick={onClose}>
+      <Card className="w-full max-w-sm p-5 fade-in" onClick={e => e.stopPropagation()}>
+        <h3 className="font-display font-bold text-stone-900 text-[18px] mb-1 flex items-center gap-2">
+          <span>📅</span>本周复盘
+        </h3>
+        <p className="text-[11px] text-stone-500 mb-4">{stats.weekRange}</p>
+        <div className="grid grid-cols-2 gap-3 mb-4">
+          <div className="border border-stone-200 p-3" style={{borderRadius:'3px'}}>
+            <div className="font-display font-bold text-[#A30236] text-3xl tabular-nums leading-none">{stats.thisWeek}</div>
+            <div className="text-[10px] tracking-[0.16em] uppercase text-stone-500 mt-1.5 font-semibold">本周预演</div>
+          </div>
+          <div className="border border-stone-200 p-3" style={{borderRadius:'3px'}}>
+            <div className={`font-display font-bold text-3xl tabular-nums leading-none ${stats.diff > 0 ? 'text-emerald-600' : stats.diff < 0 ? 'text-amber-600' : 'text-stone-900'}`}>
+              {stats.diff > 0 ? '+' : ''}{stats.diff}
+            </div>
+            <div className="text-[10px] tracking-[0.16em] uppercase text-stone-500 mt-1.5 font-semibold">相比上周</div>
+          </div>
+        </div>
+        <div className="bg-stone-50 px-3 py-3 text-[12px] text-stone-700 leading-relaxed mb-3" style={{borderRadius:'2px'}}>
+          {stats.diff > 0
+            ? <>💪 这周你比上周多录了 <span className="font-bold text-emerald-700">{stats.diff}</span> 条 · 节奏在加快</>
+            : stats.diff === 0
+              ? <>✓ 跟上周一样的节奏 · 稳</>
+              : <>🙂 比上周少了 {Math.abs(stats.diff)} 条 · 下周一起再追回来</>}
+        </div>
+        <div className="text-[11px] text-stone-600 leading-relaxed mb-4 space-y-0.5">
+          <div>· 本周 <span className="font-bold">{stats.activeDaysThisWeek}</span> 天有预演</div>
+          <div>· 累计 <span className="font-bold">{stats.allTime}</span> 条 · 第一性原理：每开口一次，离镜头自然就近一步</div>
+        </div>
+        <Btn variant="primary" className="w-full" onClick={onClose}>继续加油 →</Btn>
+      </Card>
+    </div>
+  );
+};
+
 const HomeView = ({ onSelect, onOpenSettings }) => {
   const cards = [
     { id: 'improv',       no: '01', icon: 'dice',     cn: '即兴练习',     tag: '抛话题 · 倒计时', desc: '随机抽题 · 倒计时压力下逼出无稿即兴的能力。',           stat: '3', stat_caption: '推荐每日量' },
@@ -4953,6 +5171,26 @@ const HomeView = ({ onSelect, onOpenSettings }) => {
   const settings = useSettings();
   const dayOfWeek = ['日','一','二','三','四','五','六'][today.getDay()];
   const [editingGoal, setEditingGoal] = useState(false);
+  const [showWeeklyRecap, setShowWeeklyRecap] = useState(false);
+
+  // 每周复盘自动弹出：上次显示 > 6 天前 + 至少 3 条录像
+  useEffect(() => {
+    const files = settings.savedFiles || [];
+    if (files.length < 3) return;
+    const now = Date.now();
+    const last = settings.lastWeeklyRecap || 0;
+    if (last > 0 && (now - last) < 6 * 86400000) return;
+    if (last === 0) {
+      const oldest = Math.min(...files.map(f => f.ts || now));
+      if ((now - oldest) < 7 * 86400000) return; // 首次必须用满 7 天才弹
+    }
+    setShowWeeklyRecap(true);
+  }, [settings.savedFiles, settings.lastWeeklyRecap]);
+
+  const dismissWeeklyRecap = () => {
+    settings.setLastWeeklyRecap(Date.now());
+    setShowWeeklyRecap(false);
+  };
 
   // 打卡统计
   const stats = useMemo(() => {
@@ -5003,8 +5241,9 @@ const HomeView = ({ onSelect, onOpenSettings }) => {
             {dateStr} · 星期{dayOfWeek}
           </div>
           <h1 className="font-display font-bold text-stone-900 m-0 leading-[1.1] tracking-tight" style={{fontSize:'26px'}}>
-            今天想练什么？
+            今天先预演一条
           </h1>
+          <p className="text-[10px] text-stone-500 mt-1 leading-tight">在发布前 · 先讲给镜头听</p>
         </div>
         <div className="text-right">
           <div className={`font-display font-bold leading-none tabular-nums ${stats.todayMet ? 'text-emerald-600' : 'text-stone-900'}`} style={{fontSize:'22px'}}>
@@ -5036,12 +5275,12 @@ const HomeView = ({ onSelect, onOpenSettings }) => {
             <span className="text-[10px] tracking-[0.2em] font-bold uppercase">今日推荐 · 60 秒钩动</span>
           </div>
           <h2 className="font-display font-bold leading-tight m-0 mb-1.5" style={{fontSize:'24px'}}>
-            挑一个反常识话题<br/>三秒内抓住注意力
+            挑一个反常识话题<br/>对镜头讲 60 秒
           </h2>
-          <p className="text-white/80 text-[12px] m-0 mb-4 leading-relaxed">极致钩子 · 逼你前 3 秒就抓人</p>
+          <p className="text-white/80 text-[12px] m-0 mb-4 leading-relaxed">先在这里 freestyle · 想清楚了再正式发</p>
           <div className="inline-flex items-center gap-2 bg-white text-[#A30236] px-4 py-2 font-medium text-[13px] group-hover:bg-stone-100"
                style={{borderRadius:'3px'}}>
-            <Icon name="play" size={14} strokeWidth={1.8} /> 立即开讲
+            <Icon name="play" size={14} strokeWidth={1.8} /> 开始预演
           </div>
         </div>
       </button>
@@ -5092,6 +5331,114 @@ const HomeView = ({ onSelect, onOpenSettings }) => {
         </div>
       </div>
       {editingGoal && <GoalEditor goal={settings.dailyGoal} onSave={g => { settings.setDailyGoal(g); setEditingGoal(false); }} onClose={() => setEditingGoal(false)} />}
+      {showWeeklyRecap && <WeeklyRecapModal files={settings.savedFiles || []} onClose={dismissWeeklyRecap} />}
+
+      {/* ╭─────────────────────────────╮  */}
+      {/* │   月历热力图                │  */}
+      {/* ╰─────────────────────────────╯  */}
+      {(() => {
+        const cells = getHeatmapGrid(settings.savedFiles || []);
+        const monthNames = ['1月','2月','3月','4月','5月','6月','7月','8月','9月','10月','11月','12月'];
+        return (
+          <div className="mb-6 p-4 border border-stone-200 bg-white" style={{borderRadius:'4px'}}>
+            <div className="flex items-center justify-between mb-3">
+              <div className="flex items-center gap-2">
+                <span className="w-1 h-3.5 bg-[#A30236]" />
+                <h3 className="font-display font-bold text-stone-900 text-[13px] m-0">最近 4 周 · 预演活跃度</h3>
+              </div>
+              <div className="flex items-center gap-1 text-[9px] text-stone-500">
+                <span className="w-2 h-2 bg-stone-100" style={{borderRadius:'1px'}}/>0
+                <span className="w-2 h-2 bg-[#FBEFF2]" style={{borderRadius:'1px'}}/>1-2
+                <span className="w-2 h-2 bg-[#EEA5B4]" style={{borderRadius:'1px'}}/>3-5
+                <span className="w-2 h-2 bg-[#A30236]" style={{borderRadius:'1px'}}/>6+
+              </div>
+            </div>
+            <div className="grid grid-cols-7 gap-1 mb-1">
+              {['日','一','二','三','四','五','六'].map((d, i) => (
+                <div key={i} className="text-center text-[9px] text-stone-400">{d}</div>
+              ))}
+            </div>
+            <div className="grid grid-cols-7 gap-1">
+              {cells.map((c, i) => {
+                const bg = c.count === 0 ? 'bg-stone-100' :
+                           c.count <= 2 ? 'bg-[#FBEFF2]' :
+                           c.count <= 5 ? 'bg-[#EEA5B4]' :
+                           'bg-[#A30236]';
+                const text = c.count > 5 ? 'text-white' : c.count > 0 ? 'text-[#A30236]' : 'text-stone-400';
+                return (
+                  <div key={i}
+                    className={`aspect-square flex flex-col items-center justify-center text-[9px] ${bg} ${text} ${c.isToday ? 'ring-2 ring-[#A30236] ring-offset-1' : ''}`}
+                    style={{borderRadius:'2px'}}
+                    title={`${c.date.getMonth()+1}/${c.date.getDate()} · ${c.count} 条`}>
+                    <span className="font-bold leading-none">{c.date.getDate()}</span>
+                    {c.count > 0 && <span className="text-[8px] leading-none mt-0.5 opacity-80">×{c.count}</span>}
+                  </div>
+                );
+              })}
+            </div>
+            <div className="text-[10px] text-stone-500 mt-2 leading-relaxed">
+              {(() => {
+                const activeDays = cells.filter(c => c.count > 0).length;
+                const total = cells.reduce((a,b) => a + b.count, 0);
+                return `过去 4 周：${activeDays} 天有预演 · 累计 ${total} 条`;
+              })()}
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* ╭─────────────────────────────╮  */}
+      {/* │   成就 / 徽章                │  */}
+      {/* ╰─────────────────────────────╯  */}
+      {(() => {
+        const unlocked = ACHIEVEMENTS.filter(a => {
+          try { return a.test(settings.savedFiles || [], stats.streak); } catch { return false; }
+        });
+        const newly = detectNewlyUnlocked(settings.unlockedAchievements, unlocked.map(a => a.id));
+        // 一次性标记为已见（在 effect 里做）
+        if (newly.length > 0) {
+          setTimeout(() => settings.markAchievementsSeen(newly), 0);
+        }
+        return (
+          <div className="mb-6 p-4 border border-stone-200 bg-white" style={{borderRadius:'4px'}}>
+            <div className="flex items-center justify-between mb-3">
+              <div className="flex items-center gap-2">
+                <span className="w-1 h-3.5 bg-[#A30236]" />
+                <h3 className="font-display font-bold text-stone-900 text-[13px] m-0">成就徽章</h3>
+              </div>
+              <span className="text-[10px] text-stone-500 tabular-nums">{unlocked.length} / {ACHIEVEMENTS.length}</span>
+            </div>
+            <div className="flex gap-2 overflow-x-auto no-scrollbar -mx-1 px-1 pb-1">
+              {ACHIEVEMENTS.map(a => {
+                const isUnlocked = unlocked.some(u => u.id === a.id);
+                const isNew = newly.includes(a.id);
+                return (
+                  <div key={a.id}
+                    className={`shrink-0 w-[68px] p-2 border text-center ${
+                      isUnlocked
+                        ? (isNew ? 'border-[#F1A23F] bg-amber-50 fade-in' : 'border-[#A30236] bg-[#FBEFF2]')
+                        : 'border-stone-200 bg-stone-50 opacity-50'
+                    }`}
+                    style={{borderRadius:'3px'}}
+                    title={a.desc}
+                  >
+                    <div className="text-2xl leading-none">{a.emoji}</div>
+                    <div className="text-[9px] font-bold mt-1.5 leading-tight text-stone-700">{a.name}</div>
+                    {isNew && <div className="text-[8px] text-[#A30236] font-bold mt-1 tracking-wider">NEW!</div>}
+                  </div>
+                );
+              })}
+            </div>
+            <div className="text-[10px] text-stone-500 mt-2">
+              {unlocked.length === 0
+                ? '录第一条就能解锁第一个徽章'
+                : newly.length > 0
+                  ? `🎉 刚刚解锁了 ${newly.length} 个新徽章`
+                  : `滑动看全部 · 还有 ${ACHIEVEMENTS.length - unlocked.length} 个等着你`}
+            </div>
+          </div>
+        );
+      })()}
 
       {/* ╭─────────────────────────────╮  */}
       {/* │   SECTION LABEL             │  */}
@@ -5099,7 +5446,7 @@ const HomeView = ({ onSelect, onOpenSettings }) => {
       <div className="mb-3 flex items-end justify-between">
         <div className="flex items-center gap-2">
           <span className="w-1 h-4 bg-[#A30236] inline-block" />
-          <h2 className="font-display font-bold text-stone-900 text-[14px] m-0">五种练习模式</h2>
+          <h2 className="font-display font-bold text-stone-900 text-[14px] m-0">五种预演模式</h2>
         </div>
         <span className="text-stone-400 text-[10px] flex items-center gap-1">点击进入 <Icon name="chevron" size={10}/></span>
       </div>
@@ -7953,6 +8300,27 @@ function App() {
   });
   const saveDirRef = useRef(null); // saveDir 可能 stale，用 ref 给 removeSavedFile 用
 
+  // 已"见过"的成就（避免每次访问都弹动画）
+  const [unlockedAchievements, setUnlockedAchievementsState] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('kobo.unlockedAchievements') || '[]'); } catch { return []; }
+  });
+  const markAchievementsSeen = useCallback((ids) => {
+    setUnlockedAchievementsState(prev => {
+      const merged = Array.from(new Set([...(prev || []), ...ids]));
+      try { localStorage.setItem('kobo.unlockedAchievements', JSON.stringify(merged)); } catch {}
+      return merged;
+    });
+  }, []);
+
+  // 每周复盘上次显示时间戳
+  const [lastWeeklyRecap, setLastWeeklyRecapState] = useState(() => {
+    try { return parseInt(localStorage.getItem('kobo.lastWeeklyRecap') || '0', 10) || 0; } catch { return 0; }
+  });
+  const setLastWeeklyRecap = useCallback((ts) => {
+    setLastWeeklyRecapState(ts);
+    try { localStorage.setItem('kobo.lastWeeklyRecap', String(ts)); } catch {}
+  }, []);
+
   // 每日打卡目标
   const [dailyGoal, setDailyGoalState] = useState(() => {
     try {
@@ -8042,7 +8410,9 @@ function App() {
   const ctxValue = useMemo(() => ({
     apiKey, setApiKey, saveDir, setSaveDir, savedFiles, addSavedFile, removeSavedFile, clearAllSavedFiles,
     dailyGoal, setDailyGoal,
-  }), [apiKey, setApiKey, saveDir, savedFiles, addSavedFile, removeSavedFile, clearAllSavedFiles, dailyGoal, setDailyGoal]);
+    unlockedAchievements, markAchievementsSeen,
+    lastWeeklyRecap, setLastWeeklyRecap,
+  }), [apiKey, setApiKey, saveDir, savedFiles, addSavedFile, removeSavedFile, clearAllSavedFiles, dailyGoal, setDailyGoal, unlockedAchievements, markAchievementsSeen, lastWeeklyRecap, setLastWeeklyRecap]);
 
   // Mode → title for MobileHeader
   const headerSub = useMemo(() => {
