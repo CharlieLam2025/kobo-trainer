@@ -8715,16 +8715,68 @@ const ENDLESS_INTERVALS = [
   { value: 120, label: '2min', desc: '完整短视频' },
 ];
 
-// 训练课程预设：把"总时长 + 每题时长 + 题源"打包成一套训练
-const SESSION_PRESETS = [
-  { id: 'warmup',   emoji: '🌅', name: '早间预热', sessionMin: 5,   intervalSec: 30, source: '日常观点', desc: '6 题 × 30s · 轻松开嗓' },
-  { id: 'quick',    emoji: '⚡', name: '短闪训练', sessionMin: 10,  intervalSec: 60, source: '__all__',  desc: '10 题 × 60s · 全类别混合' },
-  { id: 'standard', emoji: '💪', name: '标准集训', sessionMin: 20,  intervalSec: 60, source: '__all__',  desc: '20 题 × 60s · 日常主力' },
-  { id: 'intense',  emoji: '🔥', name: '高强度',   sessionMin: 30,  intervalSec: 60, source: '即兴反驳', desc: '30 题 × 60s · 反驳拉极限' },
-  { id: 'storypol', emoji: '🎭', name: '观点专场', sessionMin: 20,  intervalSec: 90, source: '观点表达', desc: '13 题 × 90s · 练立场表达' },
-  { id: 'wild',     emoji: '🧠', name: '脑洞场',   sessionMin: 15,  intervalSec: 60, source: '脑洞',     desc: '15 题 × 60s · 想象力训练' },
-  { id: 'marathon', emoji: '🏃', name: '马拉松',   sessionMin: 60,  intervalSec: 60, source: '__all__',  desc: '60 题 · 60 分钟持续输出' },
+// 训练课程预设：按训练目标分组，方便选择 + 渲染
+const SESSION_PRESET_GROUPS = [
+  {
+    id: 'base',
+    label: '🌱 基础节奏',
+    blurb: '日常训练 · 从轻到重',
+    presets: [
+      { id:'warmup',   emoji:'🌅', name:'早间预热', sessionMin:5,  intervalSec:30, source:'日常观点', desc:'10 题 × 30s · 轻松开嗓' },
+      { id:'quick',    emoji:'⚡', name:'短闪训练', sessionMin:10, intervalSec:60, source:'__all__',  desc:'10 题 × 60s · 全类别混合' },
+      { id:'standard', emoji:'💪', name:'标准集训', sessionMin:20, intervalSec:60, source:'__all__',  desc:'20 题 × 60s · 日常主力' },
+      { id:'marathon', emoji:'🏃', name:'马拉松',   sessionMin:60, intervalSec:60, source:'__all__',  desc:'60 题 · 60 分钟持续输出' },
+    ],
+  },
+  {
+    id: 'micro',
+    label: '⚡ 极短特训（钩子 / 收尾 / 闪电体）',
+    blurb: '15-20s 极限压缩 · 练抖音爆款节奏',
+    presets: [
+      { id:'hook',    emoji:'🪝', name:'钩子专训', sessionMin:5, intervalSec:15, source:'__all__', desc:'20 题 × 15s · 只练前 5 秒钩子', tip:'只要前 5 秒抓人 · 后面别管' },
+      { id:'closer',  emoji:'🎯', name:'收尾专训', sessionMin:5, intervalSec:15, source:'__all__', desc:'20 题 × 15s · 练 CTA 收尾',     tip:'一句金句或一个 action · 收住' },
+      { id:'flash',   emoji:'⚡', name:'闪电体',  sessionMin:8, intervalSec:20, source:'__all__', desc:'24 题 × 20s · 抖音爆款节奏',    tip:'一句话讲完 · 不要展开' },
+    ],
+  },
+  {
+    id: 'framework',
+    label: '📐 框架结构训练',
+    blurb: '强制按表达框架开口 · 边练边内化',
+    presets: [
+      { id:'prep',     emoji:'📐', name:'PREP 集训', sessionMin:15, intervalSec:90,  source:'观点表达', desc:'10 题 × 90s · Point-Reason-Example-Point', framework:['观点','理由','例子','重申'],     tip:'P → R → E → P · 严格走结构' },
+      { id:'golden',   emoji:'⭕', name:'黄金圈',    sessionMin:15, intervalSec:90,  source:'__all__',  desc:'10 题 × 90s · Why-How-What',                framework:['Why','How','What'],              tip:'从 Why 切入 · 不要直接讲 What' },
+      { id:'story3',   emoji:'📖', name:'故事三幕',  sessionMin:12, intervalSec:120, source:'__all__',  desc:'6 题 × 120s · 用故事代替讲道理',            framework:['钩子开场','冲突反转','结局/感悟'], tip:'用故事讲 · 不要直接给结论' },
+      { id:'fcf',      emoji:'🎢', name:'FCF 结构',  sessionMin:12, intervalSec:90,  source:'__all__',  desc:'8 题 × 90s · Fact-Conflict-Forward',         framework:['事实','反差','前瞻'],            tip:'事实 → 反差 → 我怎么看' },
+    ],
+  },
+  {
+    id: 'deep',
+    label: '🎬 深度 / 反向 / 挑战',
+    blurb: '把舒适区往外推',
+    presets: [
+      { id:'longshot', emoji:'🎬', name:'长镜头',     sessionMin:25, intervalSec:300, source:'观点表达', desc:'5 题 × 5min · 知乎答主体',  tip:'不要赶 · 把一件事讲透' },
+      { id:'devil',    emoji:'😈', name:'反向辩护',   sessionMin:15, intervalSec:90,  source:'即兴反驳', desc:'10 题 × 90s · 站对立面',   tip:'不管认不认同 · 必须为对立面辩护' },
+      { id:'storypol', emoji:'🎭', name:'观点专场',   sessionMin:20, intervalSec:90,  source:'观点表达', desc:'13 题 × 90s · 练立场表达' },
+      { id:'intense',  emoji:'🔥', name:'高强度',     sessionMin:30, intervalSec:60,  source:'即兴反驳', desc:'30 题 × 60s · 反驳拉极限' },
+      { id:'wild',     emoji:'🧠', name:'脑洞场',     sessionMin:15, intervalSec:60,  source:'脑洞',     desc:'15 题 × 60s · 想象力训练' },
+    ],
+  },
+  {
+    id: 'theme',
+    label: '🛡 议题专训（你的 5 个长期议题）',
+    blurb: '只在一个议题里转 · 找到你的核心观点',
+    presets: [
+      { id:'theme-power',    emoji:'🛡', name:'夺回主权',       sessionMin:15, intervalSec:60, source:'夺回主权',       desc:'15 题 × 60s · 把方向盘拿回来', tip:'每一题都讲自己 · 不要喊口号' },
+      { id:'theme-choice',   emoji:'🎲', name:'选择论',         sessionMin:15, intervalSec:60, source:'选择论',         desc:'15 题 × 60s · 你做的选择' },
+      { id:'theme-real',     emoji:'🌑', name:'真实即护城河',   sessionMin:15, intervalSec:60, source:'真实即护城河',   desc:'15 题 × 60s · 你的真相', tip:'敢讲别人不敢讲的那一部分' },
+      { id:'theme-ai',       emoji:'🤖', name:'AI 时代的人味',  sessionMin:15, intervalSec:60, source:'AI时代的人味',  desc:'15 题 × 60s · 机器替代不了的' },
+      { id:'theme-core',     emoji:'🧘', name:'稳定内核',       sessionMin:15, intervalSec:60, source:'稳定内核',       desc:'15 题 × 60s · 找你的不动点' },
+    ],
+  },
 ];
+
+// 扁平化数组（用于按 id 查找 / 渲染）
+const SESSION_PRESETS = SESSION_PRESET_GROUPS.flatMap(g => g.presets);
 const SESSION_TIME_PRESETS = [
   { value: 0,  label: '不限',  desc: '手动结束' },
   { value: 5,  label: '5 min', desc: '快速训练' },
@@ -8774,10 +8826,24 @@ const EndlessMode = () => {
       return;
     }
     setActivePresetId(p.id);
-    setUseCustom(false);
-    setIntervalSec(p.intervalSec);
-    setUseCustomSession(false);
-    setSessionLimitMin(p.sessionMin);
+    // 每题时长：非标准值（不在 ENDLESS_INTERVALS）走自定义
+    const stdIntervals = ENDLESS_INTERVALS.map(d => d.value);
+    if (stdIntervals.includes(p.intervalSec)) {
+      setUseCustom(false);
+      setIntervalSec(p.intervalSec);
+    } else {
+      setUseCustom(true);
+      setCustomInterval(p.intervalSec);
+    }
+    // 总时长：非标准值（不在 SESSION_TIME_PRESETS）走自定义
+    const stdSessions = SESSION_TIME_PRESETS.map(d => d.value);
+    if (stdSessions.includes(p.sessionMin)) {
+      setUseCustomSession(false);
+      setSessionLimitMin(p.sessionMin);
+    } else {
+      setUseCustomSession(true);
+      setCustomSessionMin(p.sessionMin);
+    }
     if (p.source) setSource(p.source);
   }, []);
 
@@ -8895,7 +8961,11 @@ const EndlessMode = () => {
   };
 
   if (stage === 'ready') {
-    return <ReadyOverlay countdown={preCount} videoRef={cam.videoRef} hint={`无限模式 · 每 ${effectiveInterval}s 自动换题`} />;
+    const activePreset = activePresetId ? SESSION_PRESETS.find(p => p.id === activePresetId) : null;
+    const presetHint = activePreset
+      ? `${activePreset.emoji} ${activePreset.name} · 每 ${effectiveInterval}s 自动换题${activePreset.tip ? ' · ' + activePreset.tip : ''}`
+      : `无限模式 · 每 ${effectiveInterval}s 自动换题`;
+    return <ReadyOverlay countdown={preCount} videoRef={cam.videoRef} hint={presetHint} />;
   }
 
   if (stage === 'running') {
@@ -8912,6 +8982,8 @@ const EndlessMode = () => {
     const isLastTopic = effectiveSessionLimitSec > 0
       && sessionRemain <= effectiveInterval + 5
       && sessionRemain > 0;
+    // 当前激活的预设（用于在录制时显示结构提示 / tip）
+    const activePreset = activePresetId ? SESSION_PRESETS.find(p => p.id === activePresetId) : null;
     return (
       <div className="absolute inset-0 z-[70] bg-stone-950" style={{borderRadius:0}}>
         <CameraFrame videoRef={cam.videoRef} className="w-full h-full"
@@ -8941,6 +9013,25 @@ const EndlessMode = () => {
                     </span>
                   </div>
                   <div className="font-display font-bold text-lg leading-snug">{topic}</div>
+
+                  {/* 结构框架提示（PREP / 黄金圈 / 故事三幕 等） */}
+                  {activePreset?.framework && (
+                    <div className="flex flex-wrap items-center gap-1 mt-2.5">
+                      {activePreset.framework.map((f, i) => (
+                        <React.Fragment key={i}>
+                          <span className="text-[10px] bg-amber-400/20 text-amber-200 px-1.5 py-0.5 font-bold tracking-wider" style={{borderRadius:'2px'}}>{f}</span>
+                          {i < activePreset.framework.length - 1 && <span className="text-amber-400/60 text-[10px] font-bold">→</span>}
+                        </React.Fragment>
+                      ))}
+                    </div>
+                  )}
+                  {/* 额外提示文案 */}
+                  {activePreset?.tip && (
+                    <div className="text-[11px] text-amber-200/90 mt-2 leading-snug flex items-start gap-1">
+                      <span className="opacity-70">💡</span><span>{activePreset.tip}</span>
+                    </div>
+                  )}
+
                   {effectiveSessionLimitSec > 0 && (
                     <div className="text-[10px] text-stone-400 mt-2 tabular-nums tracking-wider">
                       训练已用 {formatTime(sessionDuration)} / 共 {formatTime(effectiveSessionLimitSec)} · 还剩 {formatTime(sessionRemain)}
@@ -8995,6 +9086,18 @@ const EndlessMode = () => {
             <h4 className="font-display font-bold text-[16px] text-stone-900 m-0">训练报告</h4>
             {isPresetMatched && <Tag color="amber">{isPresetMatched.emoji} {isPresetMatched.name}</Tag>}
           </div>
+          {/* 显示这次训练的结构提示（如果有） */}
+          {isPresetMatched?.framework && (
+            <div className="flex flex-wrap items-center gap-1 mb-3">
+              <span className="text-[10px] text-stone-500 tracking-wider uppercase font-bold mr-1">结构</span>
+              {isPresetMatched.framework.map((f, i) => (
+                <React.Fragment key={i}>
+                  <span className="text-[10px] bg-amber-100 text-amber-900 px-1.5 py-0.5 font-bold tracking-wider" style={{borderRadius:'2px'}}>{f}</span>
+                  {i < isPresetMatched.framework.length - 1 && <span className="text-amber-700 text-[10px] font-bold">→</span>}
+                </React.Fragment>
+              ))}
+            </div>
+          )}
           <div className="grid grid-cols-2 gap-3 mb-4">
             <div className="border border-stone-200 p-3" style={{borderRadius:'3px'}}>
               <div className="font-display font-bold text-[#A30236] text-2xl tabular-nums leading-none">{totalTopics}</div>
@@ -9057,7 +9160,7 @@ const EndlessMode = () => {
     );
     return <DoneView
       blob={rec.blob}
-      contextLabel={`无限模式 · ${totalTopics} 题 · ${formatTime(sessionDuration)}`}
+      contextLabel={`无限模式 · ${isPresetMatched ? isPresetMatched.name + ' · ' : ''}${totalTopics} 题 · ${formatTime(sessionDuration)}`}
       duration={sessionDuration}
       onRetry={begin}
       onNew={resetAll}
@@ -9076,29 +9179,48 @@ const EndlessMode = () => {
           <span className="eyebrow eyebrow--crimson">训练计划</span>
         </div>
         <h3 className="font-display font-bold text-lg mb-2 text-stone-900">选一套预设 · 一键开练</h3>
-        <p className="text-[11px] text-stone-500 mb-3 leading-relaxed">
-          预设会自动填好 总时长 / 每题时长 / 题源，省去手动配置。或者下方手动调。
+        <p className="text-[11px] text-stone-500 mb-4 leading-relaxed">
+          {SESSION_PRESETS.length} 套训练 · 涵盖基础节奏 / 极短钩子 / 框架结构 / 深度反向 / 议题专训。下方还可手动微调。
         </p>
-        <div className="grid grid-cols-2 gap-2">
-          {SESSION_PRESETS.map(p => {
-            const active = activePresetId === p.id;
-            return (
-              <button key={p.id} onClick={() => applyPreset(p)}
-                className={`text-left p-3 border-2 transition-all ${
-                  active ? 'border-[#A30236] bg-[#FBEFF2]' : 'border-stone-200 hover:border-stone-300'
-                }`}
-                style={{borderRadius:'3px'}}
-              >
-                <div className="flex items-center gap-1.5 mb-1">
-                  <span className="text-base">{p.emoji}</span>
-                  <span className="font-semibold text-sm">{p.name}</span>
-                </div>
-                <div className="text-[10px] text-stone-500 leading-snug">{p.desc}</div>
-                <div className="text-[10px] text-[#A30236] mt-1 font-bold tracking-wider">{p.sessionMin} MIN · {p.intervalSec}s/题</div>
-              </button>
-            );
-          })}
-        </div>
+        {SESSION_PRESET_GROUPS.map(grp => (
+          <div key={grp.id} className="mb-4 last:mb-0">
+            <div className="flex items-baseline gap-2 mb-1.5">
+              <span className="text-[11px] tracking-[0.18em] uppercase font-bold text-stone-800">{grp.label}</span>
+              <span className="text-[10px] text-stone-400">· {grp.blurb}</span>
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              {grp.presets.map(p => {
+                const active = activePresetId === p.id;
+                const hasStruct = !!(p.framework || p.tip);
+                return (
+                  <button key={p.id} onClick={() => applyPreset(p)}
+                    className={`text-left p-3 border-2 transition-all relative ${
+                      active ? 'border-[#A30236] bg-[#FBEFF2]' : 'border-stone-200 hover:border-stone-300'
+                    }`}
+                    style={{borderRadius:'3px'}}
+                  >
+                    <div className="flex items-center gap-1.5 mb-1">
+                      <span className="text-base">{p.emoji}</span>
+                      <span className="font-semibold text-sm">{p.name}</span>
+                      {hasStruct && (
+                        <span className="ml-auto text-[8px] tracking-wider font-bold px-1 py-0.5 bg-amber-100 text-amber-800" style={{borderRadius:'2px'}}>带提示</span>
+                      )}
+                    </div>
+                    <div className="text-[10px] text-stone-500 leading-snug">{p.desc}</div>
+                    {p.framework && (
+                      <div className="flex flex-wrap gap-0.5 mt-1.5">
+                        {p.framework.map((f, i) => (
+                          <span key={i} className="text-[9px] bg-stone-100 text-stone-700 px-1 py-0.5 font-medium" style={{borderRadius:'2px'}}>{f}</span>
+                        ))}
+                      </div>
+                    )}
+                    <div className="text-[10px] text-[#A30236] mt-1.5 font-bold tracking-wider">{p.sessionMin} MIN · {p.intervalSec}s/题</div>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        ))}
       </Card>
 
       {/* 总训练时长 */}
