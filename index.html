@@ -4152,6 +4152,66 @@ ${String(transcript).slice(0, 2400)}
   return JSON.parse(m[0]);
 }
 
+// DeepSeek 虚拟发布：假装发到平台，模拟真实观众的多立场评论 + 互动数据估算
+async function deepseekVirtualPublish({ apiKey, topic, transcript, durationSec }) {
+  if (!apiKey) throw new Error('需要 API Key');
+  const sys = '你是一位社交媒体老手，熟悉抖音 / 小红书 / 视频号的真实评论生态。你要模拟一条短视频在被推荐后真实观众的反应 —— 包括赞美、质疑、跑题、玩梗、阴阳怪气、催更等不同立场。';
+  const usr = `这是一条短视频口播：
+话题：《${topic || '自由口播'}》
+时长：${Math.round(durationSec)} 秒
+转录稿："""
+${String(transcript || '').slice(0, 1800) || '（用户没有转录稿，请基于话题做合理推断）'}
+"""
+
+假装这条已经发出去了 · 给一份模拟反馈，严格按 JSON 返回（不要 markdown 代码块、不要解释）：
+{
+  "platform": "抖音 / 小红书 / 视频号 三选一（推荐最适合的）",
+  "platform_reason": "≤25 字理由",
+  "estimated": {
+    "likes": 数字（基于内容质量 + 话题热度 + 时长，给个合理估算 50-50000）,
+    "comments": 数字,
+    "shares": 数字,
+    "watch_through": 0-100 整数（完播率%）
+  },
+  "vibe": "viral | niche | divisive | boring | wholesome 之一",
+  "headline": "≤20 字一句话标题（站在观众视角，可以是疑问可以是抓人）",
+  "comments": [
+    { "stance": "理解派|吃瓜|挑刺|同行|围观|玩梗 之一", "user": "网名（短/有特色/可含 emoji）", "text": "≤35 字 · 自然 · 可有错别字或网络梗" }
+  ],
+  "potential_pitfall": "≤25 字 · 可能踩雷的点（如无可空）",
+  "if_pushed_to_top": "≤25 字 · 被推流后最可能炸的部分"
+}
+
+要求：
+- comments 5-7 条 · 立场多样 · 至少一条质疑、一条玩梗、一条真心捧
+- 评论要"网友味"，不要客套 ("写得真好" 这种话不要)
+- estimated 不要一律往高估，差内容就给真实低数据
+- platform 选最贴合内容调性的那个 · 不要乱推
+- 转录稿过短或无意义 → vibe='boring' + 数据 < 500 + 评论里多写"看不懂在讲啥"
+- 如果有挑刺评论，用具体的"哪里没说清楚"，不是空骂`;
+
+  const res = await fetch('https://api.deepseek.com/chat/completions', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+    body: JSON.stringify({
+      model: 'deepseek-chat',
+      messages: [{ role:'system', content:sys }, { role:'user', content:usr }],
+      temperature: 0.9,
+      max_tokens: 1200,
+    }),
+  });
+  if (!res.ok) {
+    const txt = await res.text().catch(() => '');
+    throw new Error(`DeepSeek ${res.status}: ${txt.slice(0, 160) || res.statusText}`);
+  }
+  const data = await res.json();
+  let out = (data.choices?.[0]?.message?.content || '').trim();
+  out = out.replace(/^```json\s*/i, '').replace(/```$/, '').trim();
+  const m = out.match(/\{[\s\S]*\}/);
+  if (!m) throw new Error('AI 输出非 JSON：' + out.slice(0, 200));
+  return JSON.parse(m[0]);
+}
+
 // DeepSeek 主持人追问：根据对话历史 + 你刚说的话，生成下一个针对性问题
 async function deepseekHostFollowup({ apiKey, topic, history, lastUserSaid, kind = 'followup' }) {
   if (!apiKey) throw new Error('请先在"设置"里配置 DeepSeek API Key');
@@ -5193,6 +5253,9 @@ const DoneView = ({ blob, contextLabel, duration = 0, onRetry, onNew, extra, tra
       {/* 🎯 AI 教练复盘 */}
       {blob && <CoachReview topic={contextLabel} durationSec={duration} initialTranscript={transcript} />}
 
+      {/* 🌐 虚拟发布：假装发出去 */}
+      {blob && <VirtualPublish topic={contextLabel} durationSec={duration} initialTranscript={transcript} filename={saveStatus.filename} />}
+
       {/* ✨ AI 发布助手 */}
       {blob && contextLabel && <PublishKit topic={contextLabel} duration={duration} />}
 
@@ -5398,6 +5461,240 @@ const CoachReview = ({ topic, durationSec = 0, initialTranscript = '' }) => {
   );
 };
 
+// ============ 虚拟发布：假装发出去 · AI 模拟真实观众反应 ============
+const VIBE_META = {
+  viral:     { emoji:'🔥', label:'要爆',     color:'#A30236', bg:'#FBEFF2' },
+  niche:     { emoji:'💎', label:'小众精',   color:'#7c3aed', bg:'#F3E8FF' },
+  divisive:  { emoji:'⚔️', label:'撕裂',     color:'#F1A23F', bg:'#FEF3C7' },
+  boring:    { emoji:'💤', label:'平',       color:'#737373', bg:'#F5F5F4' },
+  wholesome: { emoji:'💚', label:'温暖',     color:'#10b981', bg:'#D1FAE5' },
+};
+
+const STANCE_COLORS = {
+  '理解派': { color:'#10b981', bg:'#D1FAE5' },
+  '吃瓜':   { color:'#A0775B', bg:'#F5F0E8' },
+  '挑刺':   { color:'#A30236', bg:'#FBEFF2' },
+  '同行':   { color:'#7c3aed', bg:'#F3E8FF' },
+  '围观':   { color:'#737373', bg:'#F5F5F4' },
+  '玩梗':   { color:'#F1A23F', bg:'#FEF3C7' },
+};
+
+const formatCount = (n) => {
+  if (n >= 10000) return (n / 10000).toFixed(1) + 'w';
+  if (n >= 1000) return (n / 1000).toFixed(1) + 'k';
+  return String(n);
+};
+
+const VirtualPublish = ({ topic, durationSec = 0, initialTranscript = '', filename = null }) => {
+  const settings = useSettings();
+  const [result, setResult]   = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError]     = useState('');
+  const [expanded, setExpanded] = useState(false);
+
+  // 如果对应的 savedFile 已经有虚拟发布数据，直接读取
+  useEffect(() => {
+    if (!filename) return;
+    const file = (settings.savedFiles || []).find(f => f.filename === filename);
+    if (file?.virtualPub) {
+      setResult(file.virtualPub);
+      setExpanded(true);
+    }
+  }, [filename, settings.savedFiles]);
+
+  const run = async () => {
+    setLoading(true); setError('');
+    try {
+      const r = await deepseekVirtualPublish({
+        apiKey: settings.apiKey,
+        topic: topic || '',
+        transcript: initialTranscript,
+        durationSec,
+      });
+      setResult(r);
+      // 写回 savedFile 持久化
+      if (filename && settings.updateSavedFile) {
+        settings.updateSavedFile(filename, { virtualPub: r });
+      }
+    } catch (e) {
+      setError(e.message || String(e));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const reset = () => {
+    setResult(null);
+    if (filename && settings.updateSavedFile) {
+      settings.updateSavedFile(filename, { virtualPub: null });
+    }
+  };
+
+  // 折叠态
+  if (!expanded && !result) {
+    return (
+      <Card className="p-4 mb-4 border-l-[3px] border-purple-400 cursor-pointer hover:bg-purple-50/50 transition-colors"
+        onClick={() => setExpanded(true)}>
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2.5">
+            <div className="w-8 h-8 bg-purple-100 text-purple-700 flex items-center justify-center" style={{borderRadius:"3px"}}>
+              <Icon name="sparkle" size={16} strokeWidth={1.7} />
+            </div>
+            <div>
+              <div className="font-display font-bold text-stone-900 text-[15px]">🌐 虚拟发布</div>
+              <div className="text-[11px] text-stone-500 mt-0.5">假装发出去 · AI 模拟不同立场的观众评论 + 数据估算</div>
+            </div>
+          </div>
+          <div className="text-purple-700 text-xs font-bold">展开 →</div>
+        </div>
+      </Card>
+    );
+  }
+
+  return (
+    <Card className="p-6 mb-4 border-l-[3px] border-purple-400">
+      <div className="flex items-center justify-between mb-4">
+        <div className="flex items-center gap-2.5">
+          <div className="w-8 h-8 bg-purple-100 text-purple-700 flex items-center justify-center" style={{borderRadius:"3px"}}>
+            <Icon name="sparkle" size={16} strokeWidth={1.7} />
+          </div>
+          <h3 className="font-display font-bold text-stone-900 text-[16px] m-0">🌐 虚拟发布</h3>
+        </div>
+        {!result && (
+          <button onClick={() => setExpanded(false)} className="text-stone-400 hover:text-stone-700 text-xs">收起 ✕</button>
+        )}
+      </div>
+
+      {!result && (
+        <>
+          <div className="text-[12px] text-stone-600 mb-3 leading-relaxed">
+            假装把这条发到平台上 · AI 会模拟<strong className="text-stone-800"> 5-7 条不同立场的真实观众评论</strong>
+            （理解派 / 吃瓜 / 挑刺 / 同行 / 围观 / 玩梗）+ 互动数据估算 + 踩雷预警。
+            <br/>
+            <span className="text-[11px] text-stone-500">这是预演的"心理预演"环节 —— 提前看到观众反应，敢真发的概率就高了。</span>
+          </div>
+
+          <div className="flex items-center gap-3">
+            <Btn variant="primary" onClick={run} disabled={loading}>
+              {loading ? '观众正在赶来...' : '🌐 假装发出去 ✨'}
+            </Btn>
+            {error && <span className="text-red-600 text-sm">{error}</span>}
+          </div>
+
+          {!initialTranscript && (
+            <div className="mt-3 text-[11px] text-amber-700 bg-amber-50 border border-amber-200 px-2.5 py-1.5" style={{borderRadius:'3px'}}>
+              ⚠️ 没有转录稿 · AI 只能基于话题做粗略推断。先去 AI 教练复盘里粘贴你的口播稿，效果会更准。
+            </div>
+          )}
+        </>
+      )}
+
+      {result && (
+        <>
+          {/* 平台 + 调性 */}
+          <div className="flex flex-wrap items-center gap-2 mb-3">
+            <div className="px-3 py-1.5 bg-stone-900 text-white text-[12px] font-bold tracking-wider" style={{borderRadius:'3px'}}>
+              📱 {result.platform}
+            </div>
+            {result.vibe && VIBE_META[result.vibe] && (
+              <div className="px-2.5 py-1 text-[11px] font-bold tracking-wider"
+                style={{
+                  borderRadius:'3px',
+                  background: VIBE_META[result.vibe].bg,
+                  color: VIBE_META[result.vibe].color,
+                  border: `1px solid ${VIBE_META[result.vibe].color}`,
+                }}>
+                {VIBE_META[result.vibe].emoji} {VIBE_META[result.vibe].label}
+              </div>
+            )}
+            {result.platform_reason && (
+              <div className="text-[11px] text-stone-500">· {result.platform_reason}</div>
+            )}
+          </div>
+
+          {/* 标题（AI 视角） */}
+          {result.headline && (
+            <div className="p-3 bg-stone-50 border-l-[3px] border-stone-400 text-[14px] text-stone-800 font-medium leading-relaxed mb-3">
+              "{result.headline}"
+            </div>
+          )}
+
+          {/* 互动数据 */}
+          {result.estimated && (
+            <div className="grid grid-cols-4 gap-1.5 mb-3">
+              <div className="text-center p-2 border border-stone-200" style={{borderRadius:'3px'}}>
+                <div className="text-[9px] tracking-wider text-stone-500 uppercase font-bold mb-0.5">点赞</div>
+                <div className="text-base font-display font-bold tabular-nums text-[#A30236]">{formatCount(result.estimated.likes || 0)}</div>
+              </div>
+              <div className="text-center p-2 border border-stone-200" style={{borderRadius:'3px'}}>
+                <div className="text-[9px] tracking-wider text-stone-500 uppercase font-bold mb-0.5">评论</div>
+                <div className="text-base font-display font-bold tabular-nums text-stone-900">{formatCount(result.estimated.comments || 0)}</div>
+              </div>
+              <div className="text-center p-2 border border-stone-200" style={{borderRadius:'3px'}}>
+                <div className="text-[9px] tracking-wider text-stone-500 uppercase font-bold mb-0.5">转发</div>
+                <div className="text-base font-display font-bold tabular-nums text-stone-900">{formatCount(result.estimated.shares || 0)}</div>
+              </div>
+              <div className="text-center p-2 border border-stone-200" style={{borderRadius:'3px'}}>
+                <div className="text-[9px] tracking-wider text-stone-500 uppercase font-bold mb-0.5">完播</div>
+                <div className="text-base font-display font-bold tabular-nums text-amber-600">{result.estimated.watch_through || 0}%</div>
+              </div>
+            </div>
+          )}
+
+          {/* 评论区（模拟） */}
+          {result.comments?.length > 0 && (
+            <div className="mb-3">
+              <div className="text-[10px] tracking-[0.22em] uppercase text-stone-500 font-bold mb-2 flex items-center gap-2">
+                💬 模拟评论区 · {result.comments.length} 条
+              </div>
+              <div className="space-y-2">
+                {result.comments.map((c, i) => {
+                  const meta = STANCE_COLORS[c.stance] || STANCE_COLORS['围观'];
+                  return (
+                    <div key={i} className="p-3 bg-white border border-stone-200" style={{borderRadius:'3px'}}>
+                      <div className="flex items-baseline gap-2 mb-1">
+                        <span className="text-[12px] font-bold text-stone-800">{c.user || '路人'}</span>
+                        <span className="text-[9px] tracking-wider font-bold px-1.5 py-0.5"
+                          style={{borderRadius:'2px', background: meta.bg, color: meta.color}}>
+                          {c.stance}
+                        </span>
+                      </div>
+                      <div className="text-[13px] text-stone-700 leading-relaxed">{c.text}</div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* 踩雷预警 / 推流爆点 */}
+          {(result.potential_pitfall || result.if_pushed_to_top) && (
+            <div className="grid sm:grid-cols-2 gap-2 mb-3">
+              {result.potential_pitfall && (
+                <div className="p-3 bg-red-50 border border-red-200" style={{borderRadius:'3px'}}>
+                  <div className="text-[10px] tracking-[0.18em] uppercase text-red-700 font-bold mb-1">⚠️ 可能踩雷</div>
+                  <div className="text-[12px] text-stone-800">{result.potential_pitfall}</div>
+                </div>
+              )}
+              {result.if_pushed_to_top && (
+                <div className="p-3 bg-amber-50 border border-amber-200" style={{borderRadius:'3px'}}>
+                  <div className="text-[10px] tracking-[0.18em] uppercase text-amber-700 font-bold mb-1">🚀 推流爆点</div>
+                  <div className="text-[12px] text-stone-800">{result.if_pushed_to_top}</div>
+                </div>
+              )}
+            </div>
+          )}
+
+          <div className="flex gap-2 mt-3 pt-3 border-t border-stone-200">
+            <Btn variant="secondary" onClick={reset}>重新模拟</Btn>
+            <button onClick={() => setExpanded(false)} className="px-3 py-1.5 text-xs text-stone-500 hover:text-stone-800">收起 ✕</button>
+          </div>
+        </>
+      )}
+    </Card>
+  );
+};
+
 // ============ 录像打标签：高光 / 待重录 / 已发布 ============
 const TAG_OPTIONS = [
   { id:'star',      label:'⭐ 高光',     color:'#F1A23F', bg:'#FEF3C7' },
@@ -5536,7 +5833,10 @@ const RecordingHistoryList = ({ settings: s }) => {
                 {f.method === 'folder' ? '⌂ 目录' : '⬇ 下载'}
               </span>
               <div className="flex-1 min-w-0">
-                <div className="text-stone-700 truncate">{f.label || f.filename}</div>
+                <div className="text-stone-700 truncate">
+                  {f.label || f.filename}
+                  {f.virtualPub && <span className="ml-1.5 text-[10px] text-purple-600" title={`虚拟发布过 · ${f.virtualPub.platform} · ${f.virtualPub.estimated?.likes || '?'} 赞`}>🌐</span>}
+                </div>
                 <div className="text-stone-400 text-[10px] truncate">{ds} · {f.filename}</div>
               </div>
               <FileTagger filename={f.filename} compact />
@@ -9391,6 +9691,21 @@ const SettingsPanel = ({ onClose }) => {
 
         {s.savedFiles.length > 0 && <RecordingHistoryList settings={s} />}
 
+        {/* 重看引导 */}
+        <div className="mb-4 pt-4 border-t border-stone-200">
+          <div className="text-sm font-medium mb-2">引导与帮助</div>
+          <button
+            onClick={() => {
+              try { window.__koboReplayOnboarding && window.__koboReplayOnboarding(); } catch {}
+              onClose();
+            }}
+            className="px-3 py-1.5 text-xs font-bold tracking-wider bg-stone-100 text-stone-700 hover:bg-stone-200 transition-colors"
+            style={{borderRadius:'3px'}}>
+            🎬 重看新手引导
+          </button>
+          <div className="text-[10px] text-stone-400 mt-1">4 屏 · 介绍这是个练习器、5 种预演模式、打卡机制、AI 反馈链路。</div>
+        </div>
+
         <div className="flex justify-end gap-2 pt-2">
           <Btn variant="ghost" onClick={onClose}>取消</Btn>
           <Btn variant="primary" onClick={save}>保存</Btn>
@@ -9408,6 +9723,129 @@ const SettingsPanel = ({ onClose }) => {
   );
 };
 
+// ============ Onboarding 引导（首次打开 · 4 屏）============
+const ONBOARDING_SLIDES = [
+  {
+    no: '01 / 04',
+    bg: 'linear-gradient(135deg, #A30236 0%, #6E001E 100%)',
+    emoji: '🎙️',
+    title: '这是预演 · 不是发布',
+    body: '你不是被逼着出片 · 你只是在镜头前再讲一遍。\n降低面对镜头的门槛，强化"预演"的感觉。',
+    bullets: [
+      '抽题 → 开口 → 复盘 —— 而已',
+      '不分享、不上传、不发出去',
+      '所有录像只在你自己手机 / 电脑',
+    ],
+  },
+  {
+    no: '02 / 04',
+    bg: 'linear-gradient(135deg, #F1A23F 0%, #C77A1C 100%)',
+    emoji: '🎯',
+    title: '五种预演模式',
+    body: '不知道讲什么？随便挑一个开始：',
+    bullets: [
+      '🎲 即兴 · 1384 题 · 倒计时硬逼',
+      '📜 提词器 · 粘爆款 / 关键词 freestyle',
+      '🎤 主持人 · AI 追问深挖你的观点',
+      '📺 虚拟直播间 · 假弹幕 / 假在线',
+      '📘 教程 · 钩子结构 / PREP / 黄金圈',
+    ],
+  },
+  {
+    no: '03 / 04',
+    bg: 'linear-gradient(135deg, #10b981 0%, #047857 100%)',
+    emoji: '📅',
+    title: '打卡 ≠ 自我压榨',
+    body: '坚持 ≠ 每天都得练 · 累了就声明休息日，streak 不会断。',
+    bullets: [
+      '每日目标可自定义（条数 + 时长）',
+      '月历热力图 · 看到一年的形状',
+      '17 个成就徽章 · 解锁的正反馈',
+      '每周复盘弹窗 · 数据化看进步',
+    ],
+  },
+  {
+    no: '04 / 04',
+    bg: 'linear-gradient(135deg, #7c3aed 0%, #4c1d95 100%)',
+    emoji: '🌟',
+    title: '预演完后 · AI 全方位陪你',
+    body: '不是录完就完了 · 一条录像可以做 4 件事：',
+    bullets: [
+      '🎯 教练复盘 · 5 维评分 + 改进建议',
+      '🌐 虚拟发布 · AI 模拟观众真实评论',
+      '✨ 一稿多发 · 小红书 / 抖音文案自动生成',
+      '⭐ 标记高光 · 翻看自己的作品集找感觉',
+    ],
+    ctaLabel: '开始第一条预演',
+  },
+];
+
+const Onboarding = ({ onDone }) => {
+  const [idx, setIdx] = useState(0);
+  const slide = ONBOARDING_SLIDES[idx];
+  const last = idx === ONBOARDING_SLIDES.length - 1;
+
+  return (
+    <div className="fixed inset-0 z-[200] fade-in" style={{background: slide.bg, color:'#fff'}}>
+      <div className="absolute inset-0 flex flex-col"
+           style={{paddingTop:'calc(env(safe-area-inset-top, 0px) + 20px)', paddingBottom:'calc(env(safe-area-inset-bottom, 0px) + 24px)'}}>
+
+        {/* 顶部：进度 + 跳过 */}
+        <div className="flex items-center justify-between px-6 mb-6">
+          <div className="text-[10px] tracking-[0.3em] uppercase font-bold opacity-70">{slide.no}</div>
+          <button onClick={onDone} className="text-[12px] tracking-wider opacity-60 hover:opacity-100 transition-opacity">
+            跳过 →
+          </button>
+        </div>
+
+        {/* 主体：emoji + 标题 + 文案 + bullets */}
+        <div className="flex-1 flex flex-col justify-center px-7 max-w-md mx-auto w-full">
+          <div className="text-[64px] leading-none mb-5">{slide.emoji}</div>
+          <h2 className="font-display font-bold text-[28px] leading-tight mb-3" style={{fontWeight: 800}}>
+            {slide.title}
+          </h2>
+          <p className="text-[14px] opacity-90 leading-relaxed mb-5 whitespace-pre-line">
+            {slide.body}
+          </p>
+          <ul className="space-y-2.5">
+            {slide.bullets.map((b, i) => (
+              <li key={i} className="text-[13px] flex items-start gap-2.5 opacity-95">
+                <span className="opacity-60 mt-0.5">·</span>
+                <span className="leading-relaxed">{b}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+
+        {/* 底部：圆点 + 按钮 */}
+        <div className="px-6 mt-6">
+          <div className="flex justify-center items-center gap-1.5 mb-5">
+            {ONBOARDING_SLIDES.map((_, i) => (
+              <span key={i}
+                className={`h-1.5 transition-all duration-300 ${i === idx ? 'bg-white w-8' : 'bg-white/40 w-1.5'}`}
+                style={{borderRadius:'1px'}} />
+            ))}
+          </div>
+          <div className="flex items-center gap-2 max-w-md mx-auto">
+            {idx > 0 && (
+              <button onClick={() => setIdx(idx - 1)}
+                className="px-4 py-3 text-[13px] font-bold tracking-wider bg-white/15 backdrop-blur hover:bg-white/25 transition-colors"
+                style={{borderRadius:'3px'}}>
+                ← 上一步
+              </button>
+            )}
+            <button onClick={() => { last ? onDone() : setIdx(idx + 1); }}
+              className="flex-1 px-4 py-3 text-[14px] font-bold tracking-wider bg-white text-stone-900 hover:bg-stone-100 transition-colors"
+              style={{borderRadius:'3px'}}>
+              {last ? (slide.ctaLabel || '开始') : '下一步 →'}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 // ============ App ============
 // 内置共享 DeepSeek key（CharlieLam 提供 · 走他个人额度）
 // 用户可以在"设置"里填自己的覆盖
@@ -9416,6 +9854,17 @@ const BUILTIN_DEEPSEEK_KEY = 'sk-7fcdaaed6b4046e4ab8b9372eb3711eb';
 function App() {
   const [mode, setMode] = useState('home');
   const [settingsOpen, setSettingsOpen] = useState(false);
+  // 首次打开 / 用户重看 → 显示引导
+  const [showOnboarding, setShowOnboarding] = useState(() => {
+    try { return !localStorage.getItem('kobo.onboarded'); } catch { return false; }
+  });
+  const dismissOnboarding = useCallback(() => {
+    try { localStorage.setItem('kobo.onboarded', '1'); } catch {}
+    setShowOnboarding(false);
+  }, []);
+  const replayOnboarding = useCallback(() => {
+    setShowOnboarding(true);
+  }, []);
   // 用户自己填的 key（localStorage）
   const [userApiKey, setUserApiKeyState] = useState(() => {
     try { return localStorage.getItem('kobo.deepseekKey') || ''; } catch { return ''; }
@@ -9648,6 +10097,12 @@ function App() {
           </IOSDevice>
         </div>
       )}
+
+      {/* 首次打开 / 用户主动重看 · 引导覆盖层 */}
+      {showOnboarding && <Onboarding onDone={dismissOnboarding} />}
+
+      {/* 给 SettingsSheet 一条访问入口（通过 window 暴露） */}
+      {(() => { try { window.__koboReplayOnboarding = replayOnboarding; } catch {} return null; })()}
     </SettingsContext.Provider>
   );
 }
