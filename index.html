@@ -3913,28 +3913,54 @@ async function saveVideoToDisk(blob, label, dirHandle) {
   return { method: 'download', filename };
 }
 
-// DeepSeek API 调用：根据主题生成 N 个口播选题
-async function deepseekGenerateTopics({ apiKey, theme, count = 6, style = '' }) {
-  if (!apiKey) throw new Error('请先在右上角"设置"里填入 DeepSeek API Key');
-  const sys = '你是一位资深短视频选题策划。你给出的选题：(1) 能在 60 秒内讲清楚 (2) 自带钩子、反差或痛点 (3) 有清晰立场和观点 (4) 极度口语化、像人在说话 (5) 每条 8-20 字。';
-  const usr = `围绕主题《${theme}》，给我 ${count} 个口播短视频选题。${style ? '风格倾向：' + style + '。' : ''}\n仅返回一个 JSON 数组，例：["选题1","选题2"]。不要返回任何解释、代码块标记或前缀文字。`;
-  const res = await fetch('https://api.deepseek.com/chat/completions', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({
-      model: 'deepseek-chat',
-      messages: [{ role: 'system', content: sys }, { role: 'user', content: usr }],
-      temperature: 0.95,
-    }),
-  });
+// ============ DeepSeek 调用入口 ============
+// 部署 Cloudflare Worker 之后，把 URL 填到这里（详见 kobo-trainer-proxy/README.md）
+// 没填用户 key → 走代理（每 IP 50 次/天）· 填了用户 key → 直连无限
+const DEEPSEEK_PROXY_URL = 'https://kobo-trainer-proxy.charlielam2025.workers.dev';
+
+async function chatComplete({ apiKey, messages, temperature = 0.7, max_tokens }) {
+  const useProxy = !apiKey || !apiKey.trim();
+  const url = useProxy
+    ? `${DEEPSEEK_PROXY_URL}/v1/chat/completions`
+    : 'https://api.deepseek.com/chat/completions';
+  const headers = { 'Content-Type': 'application/json' };
+  if (!useProxy) headers['Authorization'] = `Bearer ${apiKey}`;
+
+  const body = { model: 'deepseek-chat', messages, temperature };
+  if (max_tokens) body.max_tokens = max_tokens;
+
+  let res;
+  try {
+    res = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body) });
+  } catch (e) {
+    if (useProxy) {
+      throw new Error('AI 服务暂时连不上 · 可在"设置"里填自己的 DeepSeek key 直连');
+    }
+    throw e;
+  }
+
   if (!res.ok) {
     const txt = await res.text().catch(() => '');
-    throw new Error(`DeepSeek ${res.status}: ${txt.slice(0, 200) || res.statusText}`);
+    let parsed = null;
+    try { parsed = JSON.parse(txt); } catch {}
+    const msg = parsed?.error?.message || txt.slice(0, 200) || res.statusText;
+    if (res.status === 429) {
+      throw new Error(msg || '今日 AI 额度已用完 · 明天再来 · 想无限请在"设置"里填自己的 DeepSeek key');
+    }
+    throw new Error(`AI ${res.status}: ${msg}`);
   }
-  const data = await res.json();
+  return res.json();
+}
+
+// DeepSeek API 调用：根据主题生成 N 个口播选题
+async function deepseekGenerateTopics({ apiKey, theme, count = 6, style = '' }) {
+  const sys = '你是一位资深短视频选题策划。你给出的选题：(1) 能在 60 秒内讲清楚 (2) 自带钩子、反差或痛点 (3) 有清晰立场和观点 (4) 极度口语化、像人在说话 (5) 每条 8-20 字。';
+  const usr = `围绕主题《${theme}》，给我 ${count} 个口播短视频选题。${style ? '风格倾向：' + style + '。' : ''}\n仅返回一个 JSON 数组，例：["选题1","选题2"]。不要返回任何解释、代码块标记或前缀文字。`;
+  const data = await chatComplete({
+    apiKey,
+    messages: [{ role: 'system', content: sys }, { role: 'user', content: usr }],
+    temperature: 0.95,
+  });
   const text = data.choices?.[0]?.message?.content || '';
   const m = text.match(/\[[\s\S]*\]/);
   if (!m) throw new Error('AI 输出非数组格式：' + text.slice(0, 200));
@@ -3944,7 +3970,6 @@ async function deepseekGenerateTopics({ apiKey, theme, count = 6, style = '' }) 
 
 // DeepSeek 关键词提取：把一段口播稿提炼成 8-12 个串联关键词
 async function deepseekExtractKeywords({ apiKey, text, count = 10 }) {
-  if (!apiKey) throw new Error('请先在设置里填 DeepSeek API Key');
   if (!text?.trim()) throw new Error('请先填入要提取的文本');
   const sys = '你是口播稿关键词提炼专家。把用户给的稿子提炼成串联关键词，让人看到关键词就能回忆起接下来要说什么、freestyle 串成完整内容。';
   const usr = `把下面这段口播稿提炼成 ${count} 个关键词/短语：
@@ -3958,20 +3983,11 @@ async function deepseekExtractKeywords({ apiKey, text, count = 10 }) {
 
 口播稿：
 ${text}`;
-  const res = await fetch('https://api.deepseek.com/chat/completions', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
-    body: JSON.stringify({
-      model: 'deepseek-chat',
-      messages: [{ role:'system', content:sys }, { role:'user', content:usr }],
-      temperature: 0.6,
-    }),
+  const data = await chatComplete({
+    apiKey,
+    messages: [{ role:'system', content:sys }, { role:'user', content:usr }],
+    temperature: 0.6,
   });
-  if (!res.ok) {
-    const txt = await res.text().catch(()=>'');
-    throw new Error(`DeepSeek ${res.status}: ${txt.slice(0,200) || res.statusText}`);
-  }
-  const data = await res.json();
   const out = data.choices?.[0]?.message?.content || '';
   const m = out.match(/\[[\s\S]*\]/);
   if (!m) throw new Error('AI 输出非数组：' + out.slice(0,200));
@@ -3981,7 +3997,6 @@ ${text}`;
 
 // DeepSeek 录完一稿多发：根据话题/时长，生成多平台标题 + 改写
 async function deepseekGeneratePublishKit({ apiKey, topic, mode, duration }) {
-  if (!apiKey) throw new Error('需要 DeepSeek API Key');
   if (!topic?.trim()) throw new Error('话题为空');
   const sys = '你是资深短视频内容策划。给一段口播视频，按平台生成不同风格的标题 + 配套文案，让创作者复制即发。';
   const usr = `刚录了一条口播视频：
@@ -3997,20 +4012,11 @@ async function deepseekGeneratePublishKit({ apiKey, topic, mode, duration }) {
   "xhsPost":   "小红书图文正文 200-300 字，分段，带 5 个#标签",
   "moments":   "朋友圈短文 3-5 行，卖人设的版本"
 }`;
-  const res = await fetch('https://api.deepseek.com/chat/completions', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
-    body: JSON.stringify({
-      model: 'deepseek-chat',
-      messages: [{ role:'system', content:sys }, { role:'user', content:usr }],
-      temperature: 0.85,
-    }),
+  const data = await chatComplete({
+    apiKey,
+    messages: [{ role:'system', content:sys }, { role:'user', content:usr }],
+    temperature: 0.85,
   });
-  if (!res.ok) {
-    const txt = await res.text().catch(()=>'');
-    throw new Error(`DeepSeek ${res.status}: ${txt.slice(0,200) || res.statusText}`);
-  }
-  const data = await res.json();
   const out = data.choices?.[0]?.message?.content || '';
   const m = out.match(/\{[\s\S]*\}/);
   if (!m) throw new Error('AI 输出非 JSON：' + out.slice(0,200));
@@ -4019,7 +4025,6 @@ async function deepseekGeneratePublishKit({ apiKey, topic, mode, duration }) {
 
 // DeepSeek 每日激励语：根据用户当前状态生成一句话开场
 async function deepseekDailyGreeting({ apiKey, streak, totalCount, weekCount, dayOfWeek, isRestDay, todayCount, goalCount }) {
-  if (!apiKey) throw new Error('需要 API Key');
   const sys = '你是一个温暖、有创作经验的内容创作者朋友。给用户写一句开场打招呼，口语化、不要鸡汤、不要"加油"这种空话。';
   const usr = `用户状态：
 - 连续 ${streak} 天达成目标
@@ -4043,18 +4048,12 @@ async function deepseekDailyGreeting({ apiKey, streak, totalCount, weekCount, da
 - 如果还差几条：自然 nudge
 
 仅返回这一句话，不要前缀 / 引号 / 解释。`;
-  const res = await fetch('https://api.deepseek.com/chat/completions', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
-    body: JSON.stringify({
-      model: 'deepseek-chat',
-      messages: [{ role:'system', content:sys }, { role:'user', content:usr }],
-      temperature: 0.95,
-      max_tokens: 100,
-    }),
+  const data = await chatComplete({
+    apiKey,
+    messages: [{ role:'system', content:sys }, { role:'user', content:usr }],
+    temperature: 0.95,
+    max_tokens: 100,
   });
-  if (!res.ok) throw new Error('DeepSeek ' + res.status);
-  const data = await res.json();
   return (data.choices?.[0]?.message?.content || '').trim().replace(/^["']|["']$/g, '');
 }
 
@@ -4095,7 +4094,6 @@ function wpmBand(wpm) {
 
 // DeepSeek 教练复盘：基于转录稿给 5 维评分 + 改进建议
 async function deepseekCoachReview({ apiKey, topic, transcript, durationSec, wpm, fillerTop }) {
-  if (!apiKey) throw new Error('需要 API Key');
   const sys = '你是一位资深口播教练，帮自媒体创作者复盘短视频口播稿。冷静、具体、动作化反馈，不要客套、不要鸡汤。';
   const fillerLine = (fillerTop && fillerTop.length)
     ? fillerTop.slice(0, 5).map(f => `${f.word}×${f.count}`).join('、')
@@ -4130,21 +4128,12 @@ ${String(transcript).slice(0, 2400)}
 - 不要"加油 / 继续努力"这种空话
 - 转录稿过短 / 无意义时，scores 全给 5，suggestions 提醒"先说够 60 秒再复盘"`;
 
-  const res = await fetch('https://api.deepseek.com/chat/completions', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
-    body: JSON.stringify({
-      model: 'deepseek-chat',
-      messages: [{ role:'system', content:sys }, { role:'user', content:usr }],
-      temperature: 0.4,
-      max_tokens: 700,
-    }),
+  const data = await chatComplete({
+    apiKey,
+    messages: [{ role:'system', content:sys }, { role:'user', content:usr }],
+    temperature: 0.4,
+    max_tokens: 700,
   });
-  if (!res.ok) {
-    const txt = await res.text().catch(() => '');
-    throw new Error(`DeepSeek ${res.status}: ${txt.slice(0, 160) || res.statusText}`);
-  }
-  const data = await res.json();
   let out = (data.choices?.[0]?.message?.content || '').trim();
   out = out.replace(/^```json\s*/i, '').replace(/```$/, '').trim();
   const m = out.match(/\{[\s\S]*\}/);
@@ -4154,7 +4143,6 @@ ${String(transcript).slice(0, 2400)}
 
 // DeepSeek 模拟发布：假装发到平台，AI 给评分 + 真实观众评论 + 互动数据
 async function deepseekVirtualPublish({ apiKey, topic, transcript, durationSec, platform = null }) {
-  if (!apiKey) throw new Error('需要 API Key');
   const sys = '你是一位社交媒体老手，熟悉抖音 / 小红书 / 视频号 / 知乎的真实评论生态。你要模拟一条短视频在被推荐后的真实反应 —— 包括点赞、收藏、评论、转发，以及不同立场的观众弹评。同时基于内容质量做客观评分。';
   const platformLine = platform
     ? `\n用户指定要发到：${platform}（按这个平台的调性来模拟）`
@@ -4214,21 +4202,12 @@ ${String(transcript || '').slice(0, 1800) || '（用户没有转录稿，请基�
 - trending_curve 表示热度曲线（如 [10, 45, 80, 60, 35] 表示先涨后跌）
 - 如果挑刺，用具体的"哪里没说清楚"，不是空骂`;
 
-  const res = await fetch('https://api.deepseek.com/chat/completions', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
-    body: JSON.stringify({
-      model: 'deepseek-chat',
-      messages: [{ role:'system', content:sys }, { role:'user', content:usr }],
-      temperature: 0.9,
-      max_tokens: 2000,
-    }),
+  const data = await chatComplete({
+    apiKey,
+    messages: [{ role:'system', content:sys }, { role:'user', content:usr }],
+    temperature: 0.9,
+    max_tokens: 2000,
   });
-  if (!res.ok) {
-    const txt = await res.text().catch(() => '');
-    throw new Error(`DeepSeek ${res.status}: ${txt.slice(0, 160) || res.statusText}`);
-  }
-  const data = await res.json();
   let out = (data.choices?.[0]?.message?.content || '').trim();
   out = out.replace(/^```json\s*/i, '').replace(/```$/, '').trim();
   const m = out.match(/\{[\s\S]*\}/);
@@ -4238,7 +4217,6 @@ ${String(transcript || '').slice(0, 1800) || '（用户没有转录稿，请基�
 
 // DeepSeek 主持人追问：根据对话历史 + 你刚说的话，生成下一个针对性问题
 async function deepseekHostFollowup({ apiKey, topic, history, lastUserSaid, kind = 'followup' }) {
-  if (!apiKey) throw new Error('请先在"设置"里配置 DeepSeek API Key');
   const sys = '你是一位资深播客主持人，正在跟嘉宾就某个话题做深度访谈。你的提问规则：(1) 紧扣嘉宾上一句话的具体内容，不要泛泛而谈。(2) 把嘉宾观点往深处推一层 —— 挖反例、挑动机、问感受、追溯源、问代价。(3) 一次只问一个问题，长度 10-25 字，要口语化、像真人主持。(4) 绝不客套和铺垫，直接开问。(5) 仅输出问题本身，不要解释、不要加引号。';
   const messages = [{ role: 'system', content: sys }];
   messages.push({ role: 'user', content: `本次访谈话题：《${topic}》` });
@@ -4256,21 +4234,12 @@ async function deepseekHostFollowup({ apiKey, topic, history, lastUserSaid, kind
   const hint = kind === 'closing' ? '\n\n现在请你说一句收尾问题（让嘉宾用一句话总结今天的核心 take-away）。' : '\n\n现在请你提下一个追问。';
   messages.push({ role: 'user', content: '【内部提示，不要在问题中复读】' + hint });
 
-  const res = await fetch('https://api.deepseek.com/chat/completions', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
-    body: JSON.stringify({
-      model: 'deepseek-chat',
-      messages,
-      temperature: 0.85,
-      max_tokens: 100,
-    }),
+  const data = await chatComplete({
+    apiKey,
+    messages,
+    temperature: 0.85,
+    max_tokens: 100,
   });
-  if (!res.ok) {
-    const txt = await res.text().catch(() => '');
-    throw new Error(`DeepSeek ${res.status}: ${txt.slice(0, 160) || res.statusText}`);
-  }
-  const data = await res.json();
   let q = (data.choices?.[0]?.message?.content || '').trim();
   // 去掉常见噪音
   q = q.replace(/^["“'']+|["”'']+$/g, '').trim();
@@ -5360,7 +5329,10 @@ const CoachReview = ({ topic, durationSec = 0, initialTranscript = '' }) => {
           <div className="w-8 h-8 bg-amber-100 text-amber-700 flex items-center justify-center" style={{borderRadius:"3px"}}>
             <Icon name="sparkle" size={16} strokeWidth={1.7} />
           </div>
-          <h3 className="font-display font-bold text-stone-900 text-[16px] m-0">🎯 AI 教练复盘</h3>
+          <div>
+            <h3 className="font-display font-bold text-stone-900 text-[16px] m-0">🎯 AI 教练复盘</h3>
+            <div className="text-[9px] tracking-wider text-stone-400 mt-0.5">🤖 内容由 AI 生成 · 仅供参考</div>
+          </div>
         </div>
         <button onClick={() => setExpanded(false)} className="text-stone-400 hover:text-stone-700 text-xs">收起 ✕</button>
       </div>
@@ -5555,6 +5527,517 @@ const ScoreBadge = ({ score = 0 }) => {
   );
 };
 
+// ============ 海报生成（Canvas）============
+// 中文字体降级链 · 各平台都有匹配
+const POSTER_FONT = '"PingFang SC", "Microsoft YaHei", "Source Han Sans CN", "Noto Sans CJK SC", system-ui, sans-serif';
+
+// 文字按宽度自动换行 · 返回每行 text
+function wrapText(ctx, text, maxWidth) {
+  if (!text) return [];
+  const lines = [];
+  let cur = '';
+  for (const ch of String(text)) {
+    const test = cur + ch;
+    if (ctx.measureText(test).width > maxWidth && cur) {
+      lines.push(cur);
+      cur = ch;
+    } else {
+      cur = test;
+    }
+  }
+  if (cur) lines.push(cur);
+  return lines;
+}
+
+function drawRoundedRect(ctx, x, y, w, h, r, fillStyle) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + w - r, y);
+  ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+  ctx.lineTo(x + w, y + h - r);
+  ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+  ctx.lineTo(x + r, y + h);
+  ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+  ctx.lineTo(x, y + r);
+  ctx.quadraticCurveTo(x, y, x + r, y);
+  ctx.closePath();
+  if (fillStyle) { ctx.fillStyle = fillStyle; ctx.fill(); }
+}
+
+// 渲染模拟发布结果为可分享海报（1080×1920）· 返回 Blob
+async function renderVirtualPublishPoster(result, contextLabel = '') {
+  const W = 1080, H = 1920;
+  const canvas = document.createElement('canvas');
+  canvas.width = W; canvas.height = H;
+  const ctx = canvas.getContext('2d');
+  const theme = PLATFORM_THEMES[result.platform] || PLATFORM_THEMES['抖音'];
+  const author = result.author || { avatar:'🦊', name:'你的账号' };
+
+  // Background
+  ctx.fillStyle = '#FAFAF9';
+  ctx.fillRect(0, 0, W, H);
+
+  // ===== Header bar =====
+  ctx.fillStyle = theme.headerBg;
+  ctx.fillRect(0, 0, W, 180);
+  ctx.fillStyle = theme.headerText;
+  ctx.textAlign = 'left';
+  ctx.font = `bold 50px ${POSTER_FONT}`;
+  ctx.fillText(`${theme.emoji} 模拟发布 · ${result.platform}`, 60, 105);
+  ctx.font = `28px ${POSTER_FONT}`;
+  ctx.fillStyle = theme.headerText + 'cc'; // semi-transparent
+  ctx.fillText(result.platform_reason || '', 60, 150);
+
+  // ===== Author + Headline =====
+  let y = 240;
+  ctx.font = `100px ${POSTER_FONT}`;
+  ctx.textAlign = 'left';
+  ctx.fillStyle = '#000';
+  ctx.fillText(author.avatar || '🦊', 60, y + 80);
+  ctx.font = `bold 44px ${POSTER_FONT}`;
+  ctx.fillStyle = '#1c1917';
+  ctx.fillText(author.name || '你的账号', 200, y + 40);
+  ctx.font = `26px ${POSTER_FONT}`;
+  ctx.fillStyle = '#78716c';
+  ctx.fillText(`刚刚 · 模拟发布到 ${result.platform}`, 200, y + 80);
+  y += 130;
+
+  // Headline (wrap)
+  ctx.fillStyle = '#1c1917';
+  ctx.font = `bold 52px ${POSTER_FONT}`;
+  const hlLines = wrapText(ctx, `"${result.headline || ''}"`, W - 120);
+  for (const line of hlLines.slice(0, 3)) {
+    ctx.fillText(line, 60, y + 50);
+    y += 72;
+  }
+  y += 30;
+
+  // ===== Score block =====
+  const scoreColor = result.score >= 90 ? '#A30236' : result.score >= 80 ? '#F1A23F' : result.score >= 70 ? '#10b981' : result.score >= 60 ? '#7c3aed' : '#737373';
+  // Score box
+  drawRoundedRect(ctx, 60, y, 280, 240, 12, scoreColor + '15');
+  ctx.strokeStyle = scoreColor;
+  ctx.lineWidth = 4;
+  ctx.stroke();
+  ctx.fillStyle = scoreColor;
+  ctx.textAlign = 'center';
+  ctx.font = `bold 24px ${POSTER_FONT}`;
+  ctx.fillText('SCORE', 200, y + 50);
+  ctx.font = `bold 130px ${POSTER_FONT}`;
+  ctx.fillText(String(result.score ?? 0), 200, y + 175);
+  ctx.font = `bold 22px ${POSTER_FONT}`;
+  const grade = result.score >= 90 ? 'S' : result.score >= 80 ? 'A' : result.score >= 70 ? 'B' : result.score >= 60 ? 'C' : 'D';
+  ctx.fillText(`${grade} 级 · /100`, 200, y + 215);
+
+  // Vibe badge (next to score)
+  if (result.vibe && VIBE_META[result.vibe]) {
+    const v = VIBE_META[result.vibe];
+    drawRoundedRect(ctx, 380, y, 290, 70, 8, v.bg);
+    ctx.strokeStyle = v.color;
+    ctx.lineWidth = 3;
+    ctx.stroke();
+    ctx.fillStyle = v.color;
+    ctx.textAlign = 'left';
+    ctx.font = `bold 32px ${POSTER_FONT}`;
+    ctx.fillText(`${v.emoji} ${v.label}`, 405, y + 47);
+  }
+
+  // 5-dim breakdown bars
+  const sb = result.score_breakdown || {};
+  const dims = [
+    ['钩子', sb.hook ?? 0],
+    ['内容', sb.content ?? 0],
+    ['共鸣', sb.resonance ?? 0],
+    ['传播', sb.virality ?? 0],
+    ['完播', sb.completion ?? 0],
+  ];
+  ctx.textAlign = 'left';
+  let by = y + 95;
+  for (const [name, val] of dims) {
+    ctx.font = `26px ${POSTER_FONT}`;
+    ctx.fillStyle = '#78716c';
+    ctx.fillText(name, 380, by + 8);
+    // bar bg
+    ctx.fillStyle = '#e7e5e4';
+    drawRoundedRect(ctx, 460, by - 12, 130, 12, 6, '#e7e5e4');
+    ctx.fillStyle = theme.accent;
+    drawRoundedRect(ctx, 460, by - 12, 130 * (val / 10), 12, 6, theme.accent);
+    ctx.fillStyle = '#1c1917';
+    ctx.font = `bold 24px ${POSTER_FONT}`;
+    ctx.textAlign = 'right';
+    ctx.fillText(String(val), 670, by + 8);
+    ctx.textAlign = 'left';
+    by += 28;
+  }
+  y += 280;
+
+  // ===== Metrics row =====
+  const est = result.estimated || {};
+  const metrics = [
+    ['❤️', formatCount(est.likes || 0), '点赞'],
+    ['💬', formatCount(est.comments || 0), '评论'],
+    ['⭐', formatCount(est.saves || 0), '收藏'],
+    ['📤', formatCount(est.shares || 0), '转发'],
+    ['▶️', `${est.watch_through || 0}%`, '完播'],
+  ];
+  const mw = (W - 120) / 5;
+  ctx.fillStyle = '#fafaf9';
+  drawRoundedRect(ctx, 60, y, W - 120, 160, 12, '#fafaf9');
+  ctx.strokeStyle = '#e7e5e4';
+  ctx.lineWidth = 2;
+  ctx.stroke();
+  metrics.forEach(([icon, val, lbl], i) => {
+    const cx = 60 + mw * i + mw / 2;
+    ctx.textAlign = 'center';
+    ctx.font = `42px ${POSTER_FONT}`;
+    ctx.fillStyle = '#1c1917';
+    ctx.fillText(icon, cx, y + 50);
+    ctx.font = `bold 36px ${POSTER_FONT}`;
+    ctx.fillStyle = i === 0 ? theme.accent : (i === 2 ? '#F1A23F' : '#1c1917');
+    ctx.fillText(val, cx, y + 105);
+    ctx.font = `22px ${POSTER_FONT}`;
+    ctx.fillStyle = '#78716c';
+    ctx.fillText(lbl, cx, y + 140);
+  });
+  y += 200;
+
+  // ===== Top comments =====
+  if (result.comments?.length) {
+    ctx.textAlign = 'left';
+    ctx.font = `bold 32px ${POSTER_FONT}`;
+    ctx.fillStyle = '#1c1917';
+    ctx.fillText(`💬 模拟评论 · 共 ${formatCount(est.comments || result.comments.length)} 条`, 60, y);
+    y += 50;
+    // Show top 3 comments (by likes)
+    const topComments = [...result.comments]
+      .sort((a, b) => (b.likes || 0) - (a.likes || 0))
+      .slice(0, 3);
+    for (const c of topComments) {
+      const meta = STANCE_COLORS[c.stance] || STANCE_COLORS['围观'];
+      drawRoundedRect(ctx, 60, y, W - 120, 180, 10, '#fff');
+      ctx.strokeStyle = '#e7e5e4';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+      // Avatar
+      ctx.font = `52px ${POSTER_FONT}`;
+      ctx.textAlign = 'left';
+      ctx.fillStyle = '#000';
+      ctx.fillText(c.avatar || '👤', 90, y + 70);
+      // User + stance + time
+      ctx.font = `bold 28px ${POSTER_FONT}`;
+      ctx.fillStyle = '#1c1917';
+      ctx.fillText(c.user || '路人', 180, y + 50);
+      // Stance pill
+      const stanceText = c.stance || '围观';
+      ctx.font = `bold 20px ${POSTER_FONT}`;
+      const stW = ctx.measureText(stanceText).width + 16;
+      drawRoundedRect(ctx, 180 + ctx.measureText(c.user || '路人').width + 100, y + 28, stW, 30, 4, meta.bg);
+      ctx.fillStyle = meta.color;
+      ctx.fillText(stanceText, 180 + ctx.measureText(c.user || '路人').width + 108, y + 50);
+      // Time
+      ctx.font = `22px ${POSTER_FONT}`;
+      ctx.fillStyle = '#78716c';
+      ctx.fillText(c.time || '刚刚', 180 + ctx.measureText(c.user || '路人').width + 100 + stW + 20, y + 50);
+      // Text (wrap to 2 lines)
+      ctx.font = `28px ${POSTER_FONT}`;
+      ctx.fillStyle = '#292524';
+      const tLines = wrapText(ctx, c.text || '', W - 240);
+      let ty = y + 100;
+      for (const tl of tLines.slice(0, 2)) {
+        ctx.fillText(tl, 180, ty);
+        ty += 38;
+      }
+      // Likes
+      if ((c.likes || 0) > 0) {
+        ctx.font = `22px ${POSTER_FONT}`;
+        ctx.fillStyle = '#78716c';
+        ctx.fillText(`❤️ ${formatCount(c.likes)} · 回复`, 180, y + 165);
+      }
+      y += 200;
+    }
+  }
+
+  // ===== Footer =====
+  const footerY = H - 100;
+  ctx.fillStyle = '#1c1917';
+  ctx.fillRect(0, footerY, W, 100);
+  ctx.textAlign = 'center';
+  ctx.font = `bold 28px ${POSTER_FONT}`;
+  ctx.fillStyle = '#fff';
+  ctx.fillText('🎙️ 口播练习器 · 模拟发布（AI 生成 · 非真实数据）', W / 2, footerY + 42);
+  ctx.font = `22px ${POSTER_FONT}`;
+  ctx.fillStyle = '#a8a29e';
+  ctx.fillText('github.com/CharlieLam2025/kobo-trainer', W / 2, footerY + 78);
+
+  // Return as Blob
+  return new Promise(resolve => {
+    canvas.toBlob(blob => resolve(blob), 'image/png', 0.92);
+  });
+}
+
+// 渲染月度战报海报 · 把当月统计画成可分享图
+async function renderMonthlyReportPoster({ files = [], achievements = [], restDays = [], dailyGoal, month }) {
+  const W = 1080, H = 1920;
+  const canvas = document.createElement('canvas');
+  canvas.width = W; canvas.height = H;
+  const ctx = canvas.getContext('2d');
+
+  // 计算当月统计
+  const targetDate = month || new Date();
+  const year = targetDate.getFullYear();
+  const mo = targetDate.getMonth();
+  const monthStart = new Date(year, mo, 1).getTime();
+  const monthEnd = new Date(year, mo + 1, 1).getTime();
+  const monthFiles = files.filter(f => (f.ts || 0) >= monthStart && (f.ts || 0) < monthEnd);
+
+  const minDur = (dailyGoal?.durationSec || 0) * 0.8;
+  const qualifyingByDay = {};
+  for (const f of monthFiles) {
+    const d = new Date(f.ts);
+    const dk = `${d.getFullYear()}-${d.getMonth()+1}-${d.getDate()}`;
+    if (!qualifyingByDay[dk]) qualifyingByDay[dk] = 0;
+    if ((f.duration || 0) >= minDur) qualifyingByDay[dk]++;
+  }
+  const goalCount = dailyGoal?.count || 3;
+  const restSet = new Set(restDays || []);
+  const activeDays = Object.keys(qualifyingByDay).length;
+  const metDays = Object.values(qualifyingByDay).filter(c => c >= goalCount).length;
+  const stars = monthFiles.filter(f => f.tag === 'star').length;
+  const totalDur = monthFiles.reduce((s, f) => s + (f.duration || 0), 0);
+  // streak 计算（当月最长连续 streak）
+  let maxStreak = 0, curStreak = 0;
+  const daysInMonth = new Date(year, mo + 1, 0).getDate();
+  for (let d = 1; d <= daysInMonth; d++) {
+    const dk = `${year}-${mo+1}-${d}`;
+    const isMet = (qualifyingByDay[dk] || 0) >= goalCount;
+    const isRest = restSet.has(dk) || restSet.has(`${year}-${String(mo+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`);
+    if (isMet || isRest) {
+      curStreak++;
+      maxStreak = Math.max(maxStreak, curStreak);
+    } else if (new Date(year, mo, d).getTime() > Date.now()) {
+      // 未来日期不算
+    } else {
+      curStreak = 0;
+    }
+  }
+
+  // ===== Background gradient =====
+  const grad = ctx.createLinearGradient(0, 0, 0, H);
+  grad.addColorStop(0, '#A30236');
+  grad.addColorStop(1, '#6E001E');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, W, 280);
+  ctx.fillStyle = '#FAFAF9';
+  ctx.fillRect(0, 280, W, H - 280);
+
+  // ===== Header =====
+  ctx.textAlign = 'left';
+  ctx.font = `bold 42px ${POSTER_FONT}`;
+  ctx.fillStyle = '#fff';
+  ctx.fillText('🎙️ 我的口播月报', 60, 110);
+  ctx.font = `28px ${POSTER_FONT}`;
+  ctx.fillStyle = '#ffffffcc';
+  ctx.fillText(`${year} 年 ${mo + 1} 月 · ${activeDays} 天活跃 / ${metDays} 天达标`, 60, 160);
+
+  // ===== Hero numbers (3 cards) =====
+  const heroY = 220;
+  const cardW = (W - 180) / 3;
+  const stats = [
+    { num: monthFiles.length, lbl: '条预演',   color: '#A30236' },
+    { num: maxStreak,         lbl: '天连续',   color: '#F1A23F' },
+    { num: stars,             lbl: '⭐ 高光', color: '#10b981' },
+  ];
+  stats.forEach((s, i) => {
+    const x = 60 + (cardW + 30) * i;
+    drawRoundedRect(ctx, x, heroY, cardW, 220, 16, '#fff');
+    ctx.strokeStyle = '#e7e5e4';
+    ctx.lineWidth = 3;
+    ctx.stroke();
+    ctx.textAlign = 'center';
+    ctx.font = `bold 96px ${POSTER_FONT}`;
+    ctx.fillStyle = s.color;
+    ctx.fillText(String(s.num), x + cardW / 2, heroY + 130);
+    ctx.font = `26px ${POSTER_FONT}`;
+    ctx.fillStyle = '#78716c';
+    ctx.fillText(s.lbl, x + cardW / 2, heroY + 180);
+  });
+
+  // ===== Heatmap =====
+  let y = 510;
+  ctx.textAlign = 'left';
+  ctx.font = `bold 30px ${POSTER_FONT}`;
+  ctx.fillStyle = '#1c1917';
+  ctx.fillText('📅 本月活跃热力图', 60, y);
+  y += 30;
+
+  // 月份方格（7 列 · 行数 = ceil(daysInMonth / 7) + 起始偏移）
+  const firstDow = new Date(year, mo, 1).getDay();
+  const totalCells = firstDow + daysInMonth;
+  const rows = Math.ceil(totalCells / 7);
+  const cellSize = (W - 180) / 7;
+  const heatY = y + 20;
+
+  // 星期标签
+  ['日','一','二','三','四','五','六'].forEach((d, i) => {
+    ctx.font = `20px ${POSTER_FONT}`;
+    ctx.fillStyle = '#a8a29e';
+    ctx.textAlign = 'center';
+    ctx.fillText(d, 60 + cellSize * i + cellSize / 2, heatY - 8);
+  });
+
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < 7; c++) {
+      const cellIdx = r * 7 + c;
+      const dayNum = cellIdx - firstDow + 1;
+      const cx = 60 + c * cellSize;
+      const cy = heatY + r * cellSize;
+      if (dayNum < 1 || dayNum > daysInMonth) continue;
+      const dk = `${year}-${mo+1}-${dayNum}`;
+      const count = qualifyingByDay[dk] || 0;
+      const isRest = restSet.has(dk) || restSet.has(`${year}-${String(mo+1).padStart(2,'0')}-${String(dayNum).padStart(2,'0')}`);
+      let bg, txtColor;
+      if (isRest) { bg = '#7dd3fc'; txtColor = '#0c4a6e'; }
+      else if (count === 0) { bg = '#f5f5f4'; txtColor = '#a8a29e'; }
+      else if (count <= 2) { bg = '#FBEFF2'; txtColor = '#A30236'; }
+      else if (count <= 5) { bg = '#EEA5B4'; txtColor = '#fff'; }
+      else { bg = '#A30236'; txtColor = '#fff'; }
+      drawRoundedRect(ctx, cx + 4, cy + 4, cellSize - 8, cellSize - 8, 8, bg);
+      ctx.font = `bold 28px ${POSTER_FONT}`;
+      ctx.fillStyle = txtColor;
+      ctx.textAlign = 'center';
+      ctx.fillText(String(dayNum), cx + cellSize / 2, cy + cellSize / 2 + 8);
+      if (count > 0 && !isRest) {
+        ctx.font = `16px ${POSTER_FONT}`;
+        ctx.fillText(`×${count}`, cx + cellSize / 2, cy + cellSize / 2 + 30);
+      }
+      if (isRest) {
+        ctx.font = `18px ${POSTER_FONT}`;
+        ctx.fillText('💤', cx + cellSize / 2, cy + cellSize / 2 + 30);
+      }
+    }
+  }
+  y = heatY + rows * cellSize + 30;
+
+  // ===== Badges =====
+  if (achievements.length > 0) {
+    ctx.textAlign = 'left';
+    ctx.font = `bold 30px ${POSTER_FONT}`;
+    ctx.fillStyle = '#1c1917';
+    ctx.fillText(`🎉 解锁徽章 · ${achievements.length} 个`, 60, y);
+    y += 40;
+    const topBadges = achievements.slice(0, 6);
+    const bw = (W - 180) / 6;
+    topBadges.forEach((a, i) => {
+      const x = 60 + (bw + 4) * i;
+      drawRoundedRect(ctx, x, y, bw, 130, 10, '#FBEFF2');
+      ctx.strokeStyle = '#A30236';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+      ctx.textAlign = 'center';
+      ctx.font = `52px ${POSTER_FONT}`;
+      ctx.fillStyle = '#000';
+      ctx.fillText(a.emoji || '🏆', x + bw / 2, y + 70);
+      ctx.font = `18px ${POSTER_FONT}`;
+      ctx.fillStyle = '#A30236';
+      // 名称如果太长截断
+      let name = a.name || '';
+      if (ctx.measureText(name).width > bw - 10) {
+        while (ctx.measureText(name + '...').width > bw - 10 && name.length > 1) name = name.slice(0, -1);
+        name = name + '...';
+      }
+      ctx.fillText(name, x + bw / 2, y + 110);
+    });
+    y += 150;
+  }
+
+  // ===== 总时长 + 平均 =====
+  const totalMin = Math.round(totalDur / 60);
+  const avgPerSession = monthFiles.length > 0 ? Math.round(totalDur / monthFiles.length) : 0;
+  ctx.textAlign = 'left';
+  ctx.font = `bold 26px ${POSTER_FONT}`;
+  ctx.fillStyle = '#78716c';
+  ctx.fillText(`总练习时长 ${totalMin} 分钟 · 平均每条 ${avgPerSession} 秒`, 60, y + 20);
+
+  // ===== Footer =====
+  const footerY = H - 100;
+  ctx.fillStyle = '#1c1917';
+  ctx.fillRect(0, footerY, W, 100);
+  ctx.textAlign = 'center';
+  ctx.font = `bold 28px ${POSTER_FONT}`;
+  ctx.fillStyle = '#fff';
+  ctx.fillText('🎙️ 口播练习器 · 我的成长印记', W / 2, footerY + 42);
+  ctx.font = `22px ${POSTER_FONT}`;
+  ctx.fillStyle = '#a8a29e';
+  ctx.fillText('github.com/CharlieLam2025/kobo-trainer', W / 2, footerY + 78);
+
+  return new Promise(resolve => {
+    canvas.toBlob(blob => resolve(blob), 'image/png', 0.92);
+  });
+}
+
+// 海报分享 Modal
+const PosterShareModal = ({ blob, onClose, fileName = 'kobo-poster.png' }) => {
+  const [url, setUrl] = useState(null);
+  const [shared, setShared] = useState(false);
+  useEffect(() => {
+    if (!blob) return;
+    const u = URL.createObjectURL(blob);
+    setUrl(u);
+    return () => URL.revokeObjectURL(u);
+  }, [blob]);
+
+  const download = () => {
+    if (!url) return;
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = fileName;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  };
+
+  const share = async () => {
+    if (!blob || !navigator.share) { download(); return; }
+    try {
+      const file = new File([blob], fileName, { type: 'image/png' });
+      if (navigator.canShare && !navigator.canShare({ files: [file] })) {
+        download();
+        return;
+      }
+      await navigator.share({ files: [file], title: '模拟发布结果' });
+      setShared(true);
+    } catch (e) {
+      // 用户取消 / 不支持
+      if (e.name !== 'AbortError') download();
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-[100] bg-stone-950/80 backdrop-blur flex items-center justify-center p-4" onClick={onClose}>
+      <div className="bg-white max-w-md w-full p-4 max-h-[92vh] overflow-y-auto fade-in" style={{borderRadius:'4px'}} onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="font-display font-bold text-stone-900 text-base">📸 模拟发布晒图</h3>
+          <button onClick={onClose} className="text-stone-400 hover:text-stone-900">✕</button>
+        </div>
+        {url && (
+          <img src={url} alt="poster"
+            className="w-full border border-stone-200 mb-3"
+            style={{borderRadius:'3px'}}/>
+        )}
+        <div className="flex gap-2">
+          <Btn variant="primary" onClick={share} className="flex-1">
+            {navigator.share ? '📤 分享' : '💾 下载'}
+          </Btn>
+          {navigator.share && <Btn variant="secondary" onClick={download}>💾 下载</Btn>}
+        </div>
+        <div className="text-[10px] text-stone-500 mt-3 leading-relaxed">
+          💡 长按图片可保存到相册 · 或点击上方按钮 · 海报已加 AI 生成标注
+        </div>
+      </div>
+    </div>
+  );
+};
+
 const VirtualPublish = ({ topic, durationSec = 0, initialTranscript = '', filename = null }) => {
   const settings = useSettings();
   const [result, setResult]   = useState(null);
@@ -5563,6 +6046,22 @@ const VirtualPublish = ({ topic, durationSec = 0, initialTranscript = '', filena
   const [expanded, setExpanded] = useState(false);
   const [chosenPlatform, setChosenPlatform] = useState(null); // 用户主动选择的平台 (可空 → AI 自动)
   const [publishStage, setPublishStage] = useState('idle'); // idle | publishing | done
+  // 海报生成
+  const [posterBlob, setPosterBlob] = useState(null);
+  const [posterLoading, setPosterLoading] = useState(false);
+  const makePoster = async () => {
+    if (!result) return;
+    setPosterLoading(true);
+    try {
+      const blob = await renderVirtualPublishPoster(result, topic);
+      setPosterBlob(blob);
+    } catch (e) {
+      console.error('poster error', e);
+      setError('生成海报失败：' + (e?.message || e));
+    } finally {
+      setPosterLoading(false);
+    }
+  };
 
   // 如果对应的 savedFile 已经有数据，直接读取
   useEffect(() => {
@@ -5662,7 +6161,10 @@ const VirtualPublish = ({ topic, durationSec = 0, initialTranscript = '', filena
             <div className="w-8 h-8 bg-purple-100 text-purple-700 flex items-center justify-center" style={{borderRadius:"3px"}}>
               <Icon name="sparkle" size={16} strokeWidth={1.7} />
             </div>
-            <h3 className="font-display font-bold text-stone-900 text-[16px] m-0">🌐 模拟发布</h3>
+            <div>
+              <h3 className="font-display font-bold text-stone-900 text-[16px] m-0">🌐 模拟发布</h3>
+              <div className="text-[9px] tracking-wider text-stone-400 mt-0.5">🤖 评论 / 评分 / 数据由 AI 生成 · 非真实平台数据</div>
+            </div>
           </div>
           <button onClick={() => setExpanded(false)} className="text-stone-400 hover:text-stone-700 text-xs">收起 ✕</button>
         </div>
@@ -5898,11 +6400,16 @@ const VirtualPublish = ({ topic, durationSec = 0, initialTranscript = '', filena
           </div>
         )}
 
-        <div className="flex gap-2 mt-5 pt-4 border-t border-stone-200">
+        <div className="flex gap-2 mt-5 pt-4 border-t border-stone-200 flex-wrap">
+          <Btn variant="primary" onClick={makePoster} disabled={posterLoading}>
+            {posterLoading ? '生成中...' : '📸 生成晒图'}
+          </Btn>
           <Btn variant="secondary" onClick={reset}>重新模拟</Btn>
           <button onClick={() => setExpanded(false)} className="px-3 py-1.5 text-xs text-stone-500 hover:text-stone-800">收起 ✕</button>
         </div>
       </div>
+      {posterBlob && <PosterShareModal blob={posterBlob} onClose={() => setPosterBlob(null)}
+        fileName={`模拟发布-${result.score || 0}分-${Date.now()}.png`} />}
     </Card>
   );
 };
@@ -6112,7 +6619,10 @@ const PublishKit = ({ topic, duration }) => {
           <div className="w-8 h-8 bg-[#FBEFF2] text-[#A30236] flex items-center justify-center" style={{borderRadius:'3px'}}>
             <Icon name="sparkle" size={16} strokeWidth={1.7}/>
           </div>
-          <h3 className="font-display font-bold text-stone-900 text-[16px] m-0">AI 发布助手</h3>
+          <div>
+            <h3 className="font-display font-bold text-stone-900 text-[16px] m-0">AI 发布助手</h3>
+            <div className="text-[9px] tracking-wider text-stone-400 mt-0.5">🤖 标题 / 文案由 AI 生成 · 仅供参考</div>
+          </div>
           <Tag color="violet">DeepSeek</Tag>
         </div>
         <p className="text-[12px] text-stone-600 leading-relaxed mb-4">
@@ -6585,6 +7095,30 @@ const HomeView = ({ onSelect, onOpenSettings }) => {
   const [editingGoal, setEditingGoal] = useState(false);
   const [showWeeklyRecap, setShowWeeklyRecap] = useState(false);
   const [dailyGreeting, setDailyGreeting] = useState('');
+  // 月度战报海报
+  const [reportBlob, setReportBlob] = useState(null);
+  const [reportLoading, setReportLoading] = useState(false);
+  const makeMonthlyReport = async () => {
+    setReportLoading(true);
+    try {
+      const unlocked = ACHIEVEMENTS.filter(a => {
+        try { return a.test(settings.savedFiles || [], 0); } catch { return false; }
+      });
+      const blob = await renderMonthlyReportPoster({
+        files: settings.savedFiles || [],
+        achievements: unlocked,
+        restDays: settings.restDays || [],
+        dailyGoal: settings.dailyGoal,
+        month: new Date(),
+      });
+      setReportBlob(blob);
+    } catch (e) {
+      console.error('monthly report error', e);
+      alert('生成战报失败：' + (e?.message || e));
+    } finally {
+      setReportLoading(false);
+    }
+  };
 
   // 每日激励语（按日缓存，避免重复调 AI）
   useEffect(() => {
@@ -6752,7 +7286,7 @@ const HomeView = ({ onSelect, onOpenSettings }) => {
       {dailyGreeting && (
         <div className="mb-5 p-3 border-l-2 border-[#F1A23F] bg-stone-50 fade-in" style={{borderRadius:'2px'}}>
           <div className="flex items-baseline justify-between gap-2 mb-1">
-            <span className="text-[9px] text-stone-400 tracking-[0.18em] font-bold uppercase">CharlieLam 每日提示</span>
+            <span className="text-[9px] text-stone-400 tracking-[0.18em] font-bold uppercase">🤖 AI 每日提示</span>
             <span className="text-[9px] text-stone-300">{dateStr}</span>
           </div>
           <div className="text-[13px] text-stone-800 leading-relaxed">{dailyGreeting}</div>
@@ -6864,6 +7398,8 @@ const HomeView = ({ onSelect, onOpenSettings }) => {
       </div>
       {editingGoal && <GoalEditor goal={settings.dailyGoal} onSave={g => { settings.setDailyGoal(g); setEditingGoal(false); }} onClose={() => setEditingGoal(false)} />}
       {showWeeklyRecap && <WeeklyRecapModal files={settings.savedFiles || []} onClose={dismissWeeklyRecap} />}
+      {reportBlob && <PosterShareModal blob={reportBlob} onClose={() => setReportBlob(null)}
+        fileName={`口播月报-${new Date().toISOString().slice(0,7)}.png`} />}
 
       {/* ╭─────────────────────────────╮  */}
       {/* │   月历热力图                │  */}
@@ -6915,12 +7451,19 @@ const HomeView = ({ onSelect, onOpenSettings }) => {
                 );
               })}
             </div>
-            <div className="text-[10px] text-stone-500 mt-2 leading-relaxed">
-              {(() => {
-                const activeDays = cells.filter(c => c.count > 0).length;
-                const total = cells.reduce((a,b) => a + b.count, 0);
-                return `过去 4 周：${activeDays} 天有预演 · 累计 ${total} 条`;
-              })()}
+            <div className="text-[10px] text-stone-500 mt-2 leading-relaxed flex items-center justify-between gap-2 flex-wrap">
+              <span>
+                {(() => {
+                  const activeDays = cells.filter(c => c.count > 0).length;
+                  const total = cells.reduce((a,b) => a + b.count, 0);
+                  return `过去 4 周：${activeDays} 天有预演 · 累计 ${total} 条`;
+                })()}
+              </span>
+              <button onClick={makeMonthlyReport} disabled={reportLoading}
+                className="text-[10px] tracking-wider font-bold px-2 py-1 bg-[#A30236] text-white hover:bg-[#7E001E] transition-colors disabled:opacity-50"
+                style={{borderRadius:'2px'}}>
+                {reportLoading ? '生成中...' : '📱 本月战报'}
+              </button>
             </div>
           </div>
         );
@@ -10026,25 +10569,25 @@ const SettingsPanel = ({ onClose }) => {
           <div className="flex items-center gap-2 mb-2 flex-wrap">
             <label className="text-sm font-medium">DeepSeek API Key</label>
             {s.isBuiltinKey
-              ? <Tag color="emerald">已内置共享 key · 直接可用</Tag>
-              : <Tag color="amber">用你自己的 key</Tag>}
+              ? <Tag color="emerald">免费代理 · 每日 50 次</Tag>
+              : <Tag color="amber">用你自己的 key · 无限</Tag>}
           </div>
           <div className="bg-stone-50 border border-stone-200 p-2.5 mb-3 text-[11px] text-stone-600 leading-relaxed" style={{borderRadius:'2px'}}>
             {s.isBuiltinKey
-              ? <>📦 已内置一个共享 key（CharlieLam 出钱），AI 功能开箱可用。如果你想用自己的额度（避免被限速），可以填下面的输入框替换。</>
-              : <>✓ 正在使用你填的 key · 走你自己的 DeepSeek 余额</>}
+              ? <>📦 默认走免费代理（CharlieLam 出 key）· 每个 IP 每天 50 次免费 AI 调用。<br/>想无限调，把自己的 DeepSeek key 填到下面框 · 直连 · 走你自己的余额（DeepSeek 1 元能用很久）。</>
+              : <>✓ 正在用你自己的 key · 直连 DeepSeek · 无次数限制 · 不再走代理</>}
           </div>
           <input
             type="password"
             value={keyInput}
             onChange={e => setKeyInput(e.target.value)}
-            placeholder="sk-... （留空 = 用内置 key）"
+            placeholder="sk-... （留空 = 走免费代理）"
             className="w-full px-3 py-2 border border-stone-300 rounded-lg text-sm font-mono focus:outline-none focus:border-amber-400"
           />
           <div className="text-xs text-stone-500 mt-2">
-            自己的 key 从 <a href="https://platform.deepseek.com/api_keys" target="_blank" rel="noopener" className="text-amber-700 underline">platform.deepseek.com</a> 获取。
-            仅保存在你的浏览器 localStorage，不会上传任何服务器。
-            {keyInput && <> · <button onClick={clearKey} className="underline text-stone-600 hover:text-red-600">清除，恢复内置 key</button></>}
+            自己的 key 从 <a href="https://platform.deepseek.com/api_keys" target="_blank" rel="noopener" className="text-amber-700 underline">platform.deepseek.com</a> 获取（充值 1 元够用几个月）。
+            仅保存在你的浏览器 localStorage · 不会上传任何服务器。
+            {keyInput && <> · <button onClick={clearKey} className="underline text-stone-600 hover:text-red-600">清除，恢复免费代理</button></>}
           </div>
           <div className="flex items-center gap-2 mt-3">
             <Btn size="sm" variant="secondary" onClick={test} disabled={!keyInput.trim() || testStatus?.state === 'testing'}>
@@ -10052,6 +10595,20 @@ const SettingsPanel = ({ onClose }) => {
             </Btn>
             {testStatus?.state === 'ok' && <span className="text-xs text-emerald-700">✓ 通过 · 样例：{testStatus.sample.join(' / ')}</span>}
             {testStatus?.state === 'fail' && <span className="text-xs text-red-600">{testStatus.error}</span>}
+          </div>
+        </div>
+
+        {/* 数据 / 隐私承诺 */}
+        <div className="mb-6 pt-6 border-t border-stone-200">
+          <div className="flex items-center gap-2 mb-2">
+            <label className="text-sm font-medium">🔒 数据 & 隐私</label>
+            <Tag color="emerald">全本地</Tag>
+          </div>
+          <div className="bg-emerald-50 border border-emerald-200 p-3 text-[12px] text-emerald-900 leading-relaxed space-y-1.5" style={{borderRadius:'3px'}}>
+            <div>✅ 所有<strong>视频 / 转录稿 / 打卡数据</strong>都只存在你的设备本地</div>
+            <div>✅ 不需要登录、不需要账号、不收集任何用户数据</div>
+            <div>✅ AI 调用仅传输<strong>话题 / 转录文字</strong>（不上传视频）· 走 DeepSeek</div>
+            <div>✅ 代码<a href="https://github.com/CharlieLam2025/kobo-trainer" target="_blank" rel="noopener" className="underline font-bold">开源在 GitHub</a> · 可自行审计</div>
           </div>
         </div>
 
@@ -10242,9 +10799,8 @@ const Onboarding = ({ onDone }) => {
 };
 
 // ============ App ============
-// 内置共享 DeepSeek key（CharlieLam 提供 · 走他个人额度）
-// 用户可以在"设置"里填自己的覆盖
-const BUILTIN_DEEPSEEK_KEY = 'sk-7fcdaaed6b4046e4ab8b9372eb3711eb';
+// DeepSeek key 不再硬编码 · 没填 key 时走 Cloudflare Worker 代理（每 IP 50 次/天）
+// 用户在"设置"里可填自己的 key 解锁无限调用
 
 function App() {
   const [mode, setMode] = useState('home');
@@ -10260,12 +10816,12 @@ function App() {
   const replayOnboarding = useCallback(() => {
     setShowOnboarding(true);
   }, []);
-  // 用户自己填的 key（localStorage）
+  // 用户自己填的 key（localStorage）· 不填的话 chatComplete 会自动走代理
   const [userApiKey, setUserApiKeyState] = useState(() => {
     try { return localStorage.getItem('kobo.deepseekKey') || ''; } catch { return ''; }
   });
-  // 实际生效 key：用户自己的优先，否则用内置
-  const apiKey = userApiKey || BUILTIN_DEEPSEEK_KEY;
+  // 实际传给 deepseek* 函数的 key · 空字符串 → 走代理
+  const apiKey = userApiKey;
   const [saveDir, setSaveDir] = useState(null);
   // 保存历史：localStorage 持久化，最多 50 条
   const [savedFiles, setSavedFiles] = useState(() => {
