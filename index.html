@@ -86,6 +86,38 @@
     }
   };
 </script>
+<!-- Sentry · 错误上报（DSN 留空 → 自动不发请求，零成本不打扰用户）-->
+<script src="https://browser.sentry-cdn.com/8.34.0/bundle.min.js"
+  crossorigin="anonymous"></script>
+<script>
+  // 把你的 Sentry DSN 填这里（在 sentry.io 免费注册后拿到）· 留空则不上报、不联网
+  // 详见 https://docs.sentry.io/platforms/javascript/#configure
+  window.__SENTRY_DSN__ = ''; // ← 填入 'https://xxx@oXXX.ingest.sentry.io/XXX'
+  try {
+    if (window.__SENTRY_DSN__ && window.Sentry) {
+      window.Sentry.init({
+        dsn: window.__SENTRY_DSN__,
+        release: 'kobo-trainer@v8',
+        environment: 'production',
+        // 采样率：100% 错误，10% 性能事件（控制免费版额度）
+        tracesSampleRate: 0.1,
+        // 不上报本地开发的错误
+        beforeSend(event) {
+          const u = event.request?.url || '';
+          if (u.includes('localhost') || u.includes('127.0.0.1')) return null;
+          return event;
+        },
+        // 不收集敏感数据
+        sendDefaultPii: false,
+      });
+      console.log('[Sentry] error reporting on');
+    } else {
+      console.log('[Sentry] DSN 未配置 · 错误不上报（仅本地 console）');
+    }
+  } catch (e) {
+    console.warn('[Sentry] init failed:', e?.message || e);
+  }
+</script>
 <script crossorigin src="https://unpkg.com/react@18.3.1/umd/react.production.min.js"></script>
 <script crossorigin src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js"></script>
 <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
@@ -10606,8 +10638,9 @@ const SettingsPanel = ({ onClose }) => {
           </div>
           <div className="bg-emerald-50 border border-emerald-200 p-3 text-[12px] text-emerald-900 leading-relaxed space-y-1.5" style={{borderRadius:'3px'}}>
             <div>✅ 所有<strong>视频 / 转录稿 / 打卡数据</strong>都只存在你的设备本地</div>
-            <div>✅ 不需要登录、不需要账号、不收集任何用户数据</div>
+            <div>✅ 不需要登录、不需要账号、不收集任何用户行为</div>
             <div>✅ AI 调用仅传输<strong>话题 / 转录文字</strong>（不上传视频）· 走 DeepSeek</div>
+            <div>✅ 仅在 App 崩溃时上报<strong>报错信息</strong>给作者修 bug（无任何个人内容 · 走 Sentry · 可关）</div>
             <div>✅ 代码<a href="https://github.com/CharlieLam2025/kobo-trainer" target="_blank" rel="noopener" className="underline font-bold">开源在 GitHub</a> · 可自行审计</div>
           </div>
         </div>
@@ -11058,8 +11091,98 @@ function App() {
   );
 }
 
+// ============ ErrorBoundary · 单组件崩溃不要白屏整个 App ============
+class ErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { hasError: false, error: null, info: null };
+  }
+
+  static getDerivedStateFromError(error) {
+    return { hasError: true, error };
+  }
+
+  componentDidCatch(error, info) {
+    this.setState({ info });
+    // 上报到 Sentry（如果已加载）
+    try {
+      if (window.Sentry && typeof window.Sentry.captureException === 'function') {
+        window.Sentry.captureException(error, { extra: { componentStack: info?.componentStack } });
+      }
+    } catch {}
+    // 浏览器控制台保留（开发者能 F12 看到）
+    console.error('[ErrorBoundary]', error, info);
+  }
+
+  reset = () => {
+    this.setState({ hasError: false, error: null, info: null });
+  };
+
+  hardReload = () => {
+    try { window.location.reload(); } catch {}
+  };
+
+  render() {
+    if (!this.state.hasError) return this.props.children;
+    const errMsg = String(this.state.error?.message || this.state.error || '未知错误');
+    return (
+      <div style={{
+        position:'fixed', inset:0, padding:24,
+        background:'#FAFAF9', color:'#1c1917',
+        display:'flex', flexDirection:'column', alignItems:'stretch', justifyContent:'center',
+        fontFamily:'system-ui, -apple-system, sans-serif',
+        overflowY:'auto',
+      }}>
+        <div style={{maxWidth: 480, margin:'0 auto', width:'100%'}}>
+          <div style={{fontSize: 56, marginBottom: 16}}>🫠</div>
+          <h1 style={{fontSize:24, fontWeight:800, marginBottom:8, letterSpacing:'-0.01em'}}>
+            页面碎了一下
+          </h1>
+          <p style={{fontSize:14, color:'#78716c', marginBottom:20, lineHeight:1.6}}>
+            App 某个组件出错 · 已自动上报让作者修 · 你的数据没丢（视频 / 打卡 / 设置都在 localStorage）。
+          </p>
+          <div style={{
+            background:'#FBEFF2', border:'1px solid #f4d4dd', padding:'12px 14px',
+            borderRadius: 3, fontSize: 12, color:'#7E001E', marginBottom:20,
+            fontFamily:'ui-monospace, monospace', wordBreak:'break-all',
+          }}>
+            {errMsg.slice(0, 300)}
+          </div>
+          <div style={{display:'flex', gap:8, flexWrap:'wrap'}}>
+            <button onClick={this.reset}
+              style={{
+                padding:'12px 18px', background:'#A30236', color:'#fff',
+                border:'none', borderRadius: 3, fontWeight:700, cursor:'pointer',
+                fontSize: 13, letterSpacing: '0.04em',
+              }}>
+              试着继续 →
+            </button>
+            <button onClick={this.hardReload}
+              style={{
+                padding:'12px 18px', background:'#fff', color:'#1c1917',
+                border:'1.5px solid #d6d3d1', borderRadius: 3, fontWeight:700, cursor:'pointer',
+                fontSize: 13, letterSpacing: '0.04em',
+              }}>
+              重启 App
+            </button>
+          </div>
+          <div style={{marginTop:24, fontSize:11, color:'#a8a29e'}}>
+            🐛 帮 CharlieLam 修这个 bug：截屏上面的错误信息 · 发到
+            {' '}<a href="https://github.com/CharlieLam2025/kobo-trainer/issues" target="_blank" rel="noopener"
+              style={{color:'#A30236', textDecoration:'underline'}}>GitHub Issues</a>
+          </div>
+        </div>
+      </div>
+    );
+  }
+}
+
 const root = ReactDOM.createRoot(document.getElementById('root'));
-root.render(<App />);
+root.render(
+  <ErrorBoundary>
+    <App />
+  </ErrorBoundary>
+);
 </script>
 <script>
   // PWA: 注册 service worker（仅在可用环境下）
