@@ -86,36 +86,33 @@
     }
   };
 </script>
-<!-- Sentry · 错误上报（DSN 留空 → 自动不发请求，零成本不打扰用户）-->
-<script src="https://browser.sentry-cdn.com/8.34.0/bundle.min.js"
-  crossorigin="anonymous"></script>
+<!-- Sentry · 错误上报（DSN 留空 → 不加载 SDK · 不联网 · 零阻塞）-->
 <script>
-  // 把你的 Sentry DSN 填这里（在 sentry.io 免费注册后拿到）· 留空则不上报、不联网
-  // 详见 https://docs.sentry.io/platforms/javascript/#configure
+  // 把你的 Sentry DSN 填这里（在 sentry.io 免费注册后拿到）· 留空则完全不加载 SDK
   window.__SENTRY_DSN__ = ''; // ← 填入 'https://xxx@oXXX.ingest.sentry.io/XXX'
-  try {
-    if (window.__SENTRY_DSN__ && window.Sentry) {
-      window.Sentry.init({
-        dsn: window.__SENTRY_DSN__,
-        release: 'kobo-trainer@v8',
-        environment: 'production',
-        // 采样率：100% 错误，10% 性能事件（控制免费版额度）
-        tracesSampleRate: 0.1,
-        // 不上报本地开发的错误
-        beforeSend(event) {
-          const u = event.request?.url || '';
-          if (u.includes('localhost') || u.includes('127.0.0.1')) return null;
-          return event;
-        },
-        // 不收集敏感数据
-        sendDefaultPii: false,
-      });
-      console.log('[Sentry] error reporting on');
-    } else {
-      console.log('[Sentry] DSN 未配置 · 错误不上报（仅本地 console）');
-    }
-  } catch (e) {
-    console.warn('[Sentry] init failed:', e?.message || e);
+  // 只有配置了 DSN 才动态加载 SDK · 否则一行外网请求都不发
+  if (window.__SENTRY_DSN__) {
+    const s = document.createElement('script');
+    s.src = 'https://browser.sentry-cdn.com/8.34.0/bundle.min.js';
+    s.async = true;
+    s.onload = () => {
+      try {
+        window.Sentry?.init({
+          dsn: window.__SENTRY_DSN__,
+          release: 'kobo-trainer@v11',
+          environment: 'production',
+          tracesSampleRate: 0.1,
+          beforeSend(event) {
+            const u = event.request?.url || '';
+            if (u.includes('localhost') || u.includes('127.0.0.1')) return null;
+            return event;
+          },
+          sendDefaultPii: false,
+        });
+      } catch (e) { /* swallow */ }
+    };
+    s.onerror = () => { /* swallow */ };
+    document.head.appendChild(s);
   }
 </script>
 <script crossorigin src="https://unpkg.com/react@18.3.1/umd/react.production.min.js"></script>
