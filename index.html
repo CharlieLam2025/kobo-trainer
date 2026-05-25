@@ -3923,7 +3923,10 @@ const tsForFilename = () => {
 
 // 保存视频：优先写入用户选定的目录（File System Access API），否则触发自动下载
 async function saveVideoToDisk(blob, label, dirHandle) {
-  const filename = `口播-${tsForFilename()}-${sanitizeFilename(label)}.webm`;
+  // 仅音频（纯语音模式）走 audio- 前缀 · 仍用 .webm（WebM 也能装音频）
+  const isAudio = blob.type && blob.type.startsWith('audio/');
+  const prefix = isAudio ? '口播-audio' : '口播';
+  const filename = `${prefix}-${tsForFilename()}-${sanitizeFilename(label)}.webm`;
   if (dirHandle && window.showDirectoryPicker) {
     try {
       const fh = await dirHandle.getFileHandle(filename, { create: true });
@@ -4089,6 +4092,58 @@ async function deepseekDailyGreeting({ apiKey, streak, totalCount, weekCount, da
   return (data.choices?.[0]?.message?.content || '').trim().replace(/^["']|["']$/g, '');
 }
 
+// ============ 本地推送通知（仅 Capacitor 端可用，Web 走 Notification API 降级）============
+const NOTIFICATION_ID = 7777;
+const NOTIFICATION_BODIES = [
+  '60 秒预演一条 · 今天就完成',
+  '镜头前再讲一遍 · 别让今天空着',
+  '一条预演 · 给今天的你一个交代',
+  '今天没开口吗？1 分钟搞定',
+  '🔥 别断 streak · 今天来一条',
+];
+
+async function scheduleDailyReminder({ hour = 19, minute = 0, enabled = true }) {
+  const Cap = window.Capacitor;
+  const LN = Cap?.Plugins?.LocalNotifications;
+  // Web fallback：用浏览器 Notification API（限制大 · 仅页面打开时有效）
+  if (!LN) {
+    if (typeof Notification === 'undefined') return { ok:false, reason:'no_support' };
+    if (Notification.permission === 'default') {
+      try { await Notification.requestPermission(); } catch {}
+    }
+    return { ok: enabled, reason: 'web_limited' };
+  }
+  try {
+    // 取消之前的
+    await LN.cancel({ notifications: [{ id: NOTIFICATION_ID }] });
+    if (!enabled) return { ok:true, reason:'disabled' };
+    // 请求权限
+    const perm = await LN.requestPermissions();
+    if (perm.display !== 'granted') return { ok:false, reason:'permission_denied' };
+    // 调度每日重复
+    const body = NOTIFICATION_BODIES[Math.floor(Math.random() * NOTIFICATION_BODIES.length)];
+    await LN.schedule({
+      notifications: [{
+        id: NOTIFICATION_ID,
+        title: '🎙️ 口播练习器',
+        body,
+        schedule: { on: { hour, minute }, allowWhileIdle: true },
+        smallIcon: 'ic_stat_icon_config_sample',
+        sound: null,
+      }],
+    });
+    return { ok:true, reason:'scheduled' };
+  } catch (e) {
+    return { ok:false, reason: 'error', error: e?.message || String(e) };
+  }
+}
+
+async function cancelDailyReminder() {
+  const LN = window.Capacitor?.Plugins?.LocalNotifications;
+  if (!LN) return;
+  try { await LN.cancel({ notifications: [{ id: NOTIFICATION_ID }] }); } catch {}
+}
+
 // ============ 口播分析（本地，零成本）============
 // 中文口头禅词表（按字符数从长到短，避免 "就是" 被算两次而 "就" 又算）
 const FILLER_WORDS = ['我觉得吧', '我觉得', '所以说', '怎么说呢', '然后呢', '反正', '其实', '那个', '这个', '就是', '然后', '所以', '呃', '嗯', '啊'];
@@ -4165,6 +4220,45 @@ ${String(transcript).slice(0, 2400)}
     messages: [{ role:'system', content:sys }, { role:'user', content:usr }],
     temperature: 0.4,
     max_tokens: 700,
+  });
+  let out = (data.choices?.[0]?.message?.content || '').trim();
+  out = out.replace(/^```json\s*/i, '').replace(/```$/, '').trim();
+  const m = out.match(/\{[\s\S]*\}/);
+  if (!m) throw new Error('AI 输出非 JSON：' + out.slice(0, 200));
+  return JSON.parse(m[0]);
+}
+
+// DeepSeek 60 秒剧本生成：给话题 → 钩子 + 论点 + 收尾完整稿
+async function deepseekGenerateScript({ apiKey, topic, durationSec = 60, style = '' }) {
+  if (!topic?.trim()) throw new Error('请先填话题');
+  const sys = '你是一位经验丰富的口播脚本撰稿人 · 给短视频博主写直接可读的稿子。冷静、有钩子、有真观点 · 不要鸡汤 · 不要客套 · 不要"大家好我是XXX"开头 · 不要"感谢观看"结尾。';
+  const wordTarget = Math.round(durationSec * 4); // 中文口播约 200-260 字/分钟 · 用 240 估算
+  const usr = `话题：《${topic}》
+目标时长：${durationSec} 秒（约 ${wordTarget} 个汉字）
+${style ? `风格：${style}` : ''}
+
+请按"钩子 + 观点 + 论证 + 收尾"结构写一篇完整口播稿。
+
+要求：
+1. 直接给可逐字念的稿子 · 不要分段标题（不要写"钩子:"、"观点:"这种标签）
+2. 钩子前 5 秒抓人：用反问 / 反常识 / 冲突 / 具体数字 · 不要寒暄
+3. 观点鲜明 · 不和稀泥
+4. 论证至少 1 个具体例子或细节
+5. 收尾给一个 take-away 或 call-to-action · 不要"好了今天就分享到这里"
+6. 极度口语化 · 写出来像真人说话 · 短句多 · 没"然后/就是/那个"
+7. 总字数控制在 ${Math.round(wordTarget * 0.85)}-${Math.round(wordTarget * 1.1)} 之间
+
+严格按 JSON 返回（不要 markdown 代码块）：
+{
+  "script": "完整稿子（可逐字读 · 段落用真实换行符隔开）",
+  "structure": ["4-5 个标签描述结构 · 如 '反常识开场' '观点' '案例' 'take-away'"]
+}`;
+
+  const data = await chatComplete({
+    apiKey,
+    messages: [{ role:'system', content:sys }, { role:'user', content:usr }],
+    temperature: 0.85,
+    max_tokens: 1000,
   });
   let out = (data.choices?.[0]?.message?.content || '').trim();
   out = out.replace(/^```json\s*/i, '').replace(/```$/, '').trim();
@@ -4287,6 +4381,9 @@ const SettingsContext = React.createContext({
   dailyGoal: { count: 3, durationSec: 60 }, setDailyGoal: () => {},
   unlockedAchievements: [], markAchievementsSeen: () => {},
   lastWeeklyRecap: 0, setLastWeeklyRecap: () => {},
+  voiceOnly: false, setVoiceOnly: () => {},
+  reminderEnabled: false, setReminderEnabled: () => {},
+  reminderTime: '19:00', setReminderTime: () => {},
 });
 const useSettings = () => React.useContext(SettingsContext);
 
@@ -4370,6 +4467,15 @@ const bboxOf = (lm, idx, w, h) => {
 
 // ===== 美颜 hook：MediaPipe 检测 + canvas 2D 应用 =====
 function useCamera() {
+  // 读取全局"纯语音"设置 · settings 可能在 Context 外被调用，因此用 try/catch 兜底
+  let voiceOnlySetting = false;
+  try {
+    const settingsCtx = React.useContext(SettingsContext);
+    voiceOnlySetting = !!settingsCtx?.voiceOnly;
+  } catch {}
+  const voiceOnlyRef = useRef(voiceOnlySetting);
+  voiceOnlyRef.current = voiceOnlySetting;
+
   const streamRef        = useRef(null); // 原始 getUserMedia 流
   const videoElRef       = useRef(null); // 显示用 <video>（带 CSS filter）
   const hiddenVideoRef   = useRef(null); // 隐藏 <video>，喂给 canvas
@@ -4494,6 +4600,15 @@ function useCamera() {
 
   const start = useCallback(async () => {
     try {
+      // 🎙️ 纯语音模式：跳过所有 video 设置 · audio-only 流
+      if (voiceOnlyRef.current) {
+        const s = await navigator.mediaDevices.getUserMedia({ video: false, audio: true });
+        streamRef.current = s;
+        filteredStreamRef.current = s; // 没有 canvas 处理 · 录制直接录 audio
+        setActive(true);
+        setError(null);
+        return s;
+      }
       const s = await navigator.mediaDevices.getUserMedia({
         video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user' },
         audio: true,
@@ -4768,6 +4883,8 @@ function useCamera() {
     eyeEnlarge,   setEyeEnlarge,
     bgBlur,       setBgBlur,
     faceFxReady,  faceFxLoading,
+    voiceOnly: voiceOnlySetting,
+    streamRef, // 给 AudioVisualizer 用
   };
 }
 
@@ -4784,12 +4901,12 @@ function useRecorder() {
     if (!stream) return;
     chunksRef.current = [];
     setBlob(null);
+    // 检查是否仅音频流（纯语音模式）· 没有 video track
+    const hasVideo = stream.getVideoTracks && stream.getVideoTracks().length > 0;
     let options = {};
-    const candidates = [
-      'video/webm;codecs=vp9,opus',
-      'video/webm;codecs=vp8,opus',
-      'video/webm',
-    ];
+    const candidates = hasVideo
+      ? ['video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm']
+      : ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus'];
     for (const c of candidates) {
       if (window.MediaRecorder && MediaRecorder.isTypeSupported(c)) { options.mimeType = c; break; }
     }
@@ -4912,13 +5029,19 @@ const TopBar = ({ mode, onBack, onOpenSettings }) => {
 };
 
 // ============ Ready Overlay (3-2-1) ============
-const ReadyOverlay = ({ countdown, videoRef, hint }) => (
+const ReadyOverlay = ({ countdown, videoRef, hint, voiceOnly = false }) => (
   <div className="absolute inset-0 bg-stone-950 z-50" style={{borderRadius:0}}>
-    {/* 摄像头 —— 自拍模式（镜像），全屏可见以便用户构图 */}
-    <video ref={videoRef} autoPlay playsInline muted
-      className="absolute inset-0 w-full h-full object-cover"
-      style={{ transform: 'scaleX(-1)' }}
-    />
+    {/* 摄像头 —— 自拍模式（镜像），全屏可见以便用户构图 · 纯语音模式不渲染 video */}
+    {voiceOnly ? (
+      <div className="absolute inset-0 flex items-center justify-center" style={{background:'linear-gradient(135deg, #3a0716 0%, #1c1917 100%)'}}>
+        <div className="text-7xl opacity-50">🎙️</div>
+      </div>
+    ) : (
+      <video ref={videoRef} autoPlay playsInline muted
+        className="absolute inset-0 w-full h-full object-cover"
+        style={{ transform: 'scaleX(-1)' }}
+      />
+    )}
     {/* 半透明遮罩让倒计时更易读 */}
     <div className="absolute inset-0" style={{background:'linear-gradient(to bottom, rgba(15,15,15,0.78) 0%, rgba(15,15,15,0.45) 40%, rgba(15,15,15,0.45) 60%, rgba(15,15,15,0.78) 100%)'}} />
 
@@ -4965,12 +5088,119 @@ const ReadyOverlay = ({ countdown, videoRef, hint }) => (
 );
 
 // ============ Camera Frame ============
-const CameraFrame = ({ videoRef, overlay, className='' }) => (
-  <div className={`relative bg-stone-950 rounded-2xl overflow-hidden ${className}`}>
-    <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover" style={{transform:'scaleX(-1)'}} />
-    {overlay}
-  </div>
-);
+const CameraFrame = ({ videoRef, overlay, className='', voiceOnly = false, streamRef = null }) => {
+  if (voiceOnly) {
+    return (
+      <div className={`relative bg-gradient-to-br from-stone-950 via-stone-900 to-[#3a0716] rounded-2xl overflow-hidden ${className}`}>
+        <AudioVisualizer streamRef={streamRef} />
+        {overlay}
+      </div>
+    );
+  }
+  return (
+    <div className={`relative bg-stone-950 rounded-2xl overflow-hidden ${className}`}>
+      <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover" style={{transform:'scaleX(-1)'}} />
+      {overlay}
+    </div>
+  );
+};
+
+// 音频可视化：脉动圆 + 实时振幅条
+const AudioVisualizer = ({ streamRef }) => {
+  const canvasRef = useRef(null);
+  const rafRef = useRef(null);
+  const ctxRef = useRef(null);
+  const analyserRef = useRef(null);
+  const [level, setLevel] = useState(0);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    const stream = streamRef?.current;
+    if (!stream) return;
+    try {
+      const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      ctxRef.current = audioCtx;
+      const source = audioCtx.createMediaStreamSource(stream);
+      const analyser = audioCtx.createAnalyser();
+      analyser.fftSize = 256;
+      source.connect(analyser);
+      analyserRef.current = analyser;
+
+      const dataArr = new Uint8Array(analyser.frequencyBinCount);
+      const tick = () => {
+        analyser.getByteFrequencyData(dataArr);
+        // 计算平均振幅（0-255）
+        let sum = 0;
+        for (let i = 0; i < dataArr.length; i++) sum += dataArr[i];
+        const avg = sum / dataArr.length / 255;
+        setLevel(avg);
+
+        // 绘制柱状波形
+        const canvas = canvasRef.current;
+        if (canvas) {
+          const w = canvas.width = canvas.clientWidth * (window.devicePixelRatio || 1);
+          const h = canvas.height = canvas.clientHeight * (window.devicePixelRatio || 1);
+          const cctx = canvas.getContext('2d');
+          cctx.clearRect(0, 0, w, h);
+          const bars = 48;
+          const bw = w / bars / 2;
+          const step = Math.floor(dataArr.length / bars);
+          for (let i = 0; i < bars; i++) {
+            const v = dataArr[i * step] / 255;
+            const bh = v * h * 0.65;
+            const x = i * (bw * 2) + bw;
+            const y = h - bh - 4;
+            const grad = cctx.createLinearGradient(0, y, 0, h);
+            grad.addColorStop(0, '#F1A23F');
+            grad.addColorStop(1, '#A30236');
+            cctx.fillStyle = grad;
+            cctx.fillRect(x, y, bw * 1.4, bh);
+          }
+        }
+        rafRef.current = requestAnimationFrame(tick);
+      };
+      tick();
+    } catch (e) {
+      setError(e.message || String(e));
+    }
+    return () => {
+      if (rafRef.current) cancelAnimationFrame(rafRef.current);
+      try { ctxRef.current?.close(); } catch {}
+    };
+  }, [streamRef]);
+
+  const ringScale = 1 + level * 0.45;
+  const ringOpacity = 0.35 + level * 0.4;
+
+  return (
+    <div className="absolute inset-0 flex flex-col items-center justify-center overflow-hidden">
+      {/* 脉动圆 */}
+      <div className="relative w-44 h-44 flex items-center justify-center mb-6">
+        <div className="absolute inset-0 rounded-full bg-[#A30236]/20 transition-transform duration-100 ease-out"
+          style={{transform: `scale(${ringScale * 1.2})`, opacity: ringOpacity * 0.6}} />
+        <div className="absolute inset-4 rounded-full bg-[#A30236]/30 transition-transform duration-100 ease-out"
+          style={{transform: `scale(${ringScale})`, opacity: ringOpacity}} />
+        <div className="relative w-24 h-24 rounded-full bg-gradient-to-br from-[#F1A23F] to-[#A30236] flex items-center justify-center text-5xl shadow-2xl">
+          🎙️
+        </div>
+      </div>
+
+      {/* 实时波形 */}
+      <canvas ref={canvasRef} className="w-full h-24 max-w-md px-6" />
+
+      {/* 状态字 */}
+      <div className="text-center mt-4 px-6">
+        <div className="text-[10px] tracking-[0.3em] uppercase font-bold text-amber-300 mb-1">
+          🎙️ 纯语音模式 · 摄像头关闭
+        </div>
+        <div className="text-white/50 text-[11px]">
+          {level < 0.02 ? '听不到声音 · 试着说话' : level < 0.15 ? '声音偏轻 · 可以放大' : level > 0.6 ? '声音偏大 · 可以收一点' : '✓ 音量正好'}
+        </div>
+        {error && <div className="text-red-300 text-[10px] mt-2">{error}</div>}
+      </div>
+    </div>
+  );
+};
 
 // ============ Beauty / Filter Sheet ============
 // 滑杆组件（深色面板用）
@@ -5082,6 +5312,116 @@ const BeautyButton = ({ cam, style = {}, className = '' }) => {
         <Icon name="sparkle" size={13} />美颜
       </button>
       {open && <FilterSheet cam={cam} onClose={() => setOpen(false)} />}
+    </>
+  );
+};
+
+// 观众视角预览：临时关美颜+滤镜 5s · 看真实的自己
+const AudienceViewButton = ({ cam, style = {}, className = '' }) => {
+  const [previewing, setPreviewing] = useState(false);
+  const [savedState, setSavedState] = useState(null);
+  const timeoutRef = useRef(null);
+  const [remaining, setRemaining] = useState(0);
+  const tickRef = useRef(null);
+
+  const start = () => {
+    if (previewing) return;
+    // 没开美颜/滤镜 → 没意义，给提示但仍然让 toast 显示
+    const anyBeauty = cam.filterPreset !== 'none' || cam.beautyLevel > 0
+      || cam.skinSmooth > 0 || cam.faceSlim > 0 || cam.eyeEnlarge > 0 || cam.bgBlur > 0;
+
+    // 保存当前状态
+    setSavedState({
+      filterPreset: cam.filterPreset,
+      beautyLevel: cam.beautyLevel,
+      skinSmooth: cam.skinSmooth,
+      faceSlim: cam.faceSlim,
+      eyeEnlarge: cam.eyeEnlarge,
+      bgBlur: cam.bgBlur,
+      anyBeauty,
+    });
+    // 全部归零（即"裸"画面）
+    cam.setFilterPreset('none');
+    cam.setBeautyLevel(0);
+    cam.setSkinSmooth(0);
+    cam.setFaceSlim(0);
+    cam.setEyeEnlarge(0);
+    cam.setBgBlur(0);
+    setPreviewing(true);
+    setRemaining(5);
+
+    // 每秒 tick
+    tickRef.current = window.setInterval(() => {
+      setRemaining(r => Math.max(0, r - 1));
+    }, 1000);
+
+    // 5s 后恢复
+    timeoutRef.current = window.setTimeout(() => {
+      if (savedState) restore(); else cleanup();
+    }, 5000);
+  };
+
+  // 恢复需要拿到最新 savedState · 用 useEffect 在 previewing→false 时执行
+  const restore = () => {
+    const s = savedState;
+    if (s) {
+      cam.setFilterPreset(s.filterPreset);
+      cam.setBeautyLevel(s.beautyLevel);
+      cam.setSkinSmooth(s.skinSmooth);
+      cam.setFaceSlim(s.faceSlim);
+      cam.setEyeEnlarge(s.eyeEnlarge);
+      cam.setBgBlur(s.bgBlur);
+    }
+    cleanup();
+  };
+
+  const cleanup = () => {
+    if (timeoutRef.current) { window.clearTimeout(timeoutRef.current); timeoutRef.current = null; }
+    if (tickRef.current)    { window.clearInterval(tickRef.current);   tickRef.current = null; }
+    setPreviewing(false);
+    setSavedState(null);
+    setRemaining(0);
+  };
+
+  // 用户手动取消
+  const cancel = () => {
+    restore();
+  };
+
+  // 卸载清理
+  useEffect(() => () => {
+    if (timeoutRef.current) window.clearTimeout(timeoutRef.current);
+    if (tickRef.current)    window.clearInterval(tickRef.current);
+  }, []);
+
+  return (
+    <>
+      <button onClick={previewing ? cancel : start}
+        className={`flex items-center gap-1.5 backdrop-blur text-white px-2.5 py-1.5 text-[11px] tracking-wider font-bold transition-colors ${previewing ? 'bg-amber-500/90' : 'bg-stone-950/80'} ${className}`}
+        style={{borderRadius: '2px', ...style}}
+        title="一键看真实的自己（5 秒）">
+        <Icon name="search" size={13} />
+        {previewing ? `真实 ${remaining}s` : '真实'}
+      </button>
+
+      {/* 全屏 toast · previewing 期间显示 */}
+      {previewing && (
+        <div className="fixed inset-x-0 z-[90] flex justify-center pointer-events-none px-4"
+          style={{top:'calc(env(safe-area-inset-top, 0px) + 80px)'}}>
+          <div className="bg-amber-500/95 text-white px-4 py-3 backdrop-blur fade-in"
+            style={{borderRadius:'3px', maxWidth:'90%'}}>
+            <div className="text-[11px] tracking-[0.22em] uppercase font-bold mb-0.5 opacity-80">
+              👁 观众视角 · {remaining}s
+            </div>
+            <div className="text-sm font-bold">
+              {savedState?.anyBeauty ? '这才是观众看到的你' : '没开美颜 · 你看到的就是观众看到的'}
+            </div>
+            <div className="text-[10px] mt-1 opacity-80">
+              点击按钮可提前结束
+            </div>
+          </div>
+        </div>
+      )}
     </>
   );
 };
@@ -5264,7 +5604,15 @@ const DoneView = ({ blob, contextLabel, duration = 0, onRetry, onNew, extra, tra
         )}
 
         {url ? (
-          <video src={url} controls className="w-full rounded-xl bg-black" />
+          (blob.type && blob.type.startsWith('audio/')) ? (
+            <div className="w-full rounded-xl bg-gradient-to-br from-stone-900 to-[#3a0716] p-6 flex flex-col items-center justify-center">
+              <div className="text-6xl mb-3">🎙️</div>
+              <div className="text-amber-300 text-[10px] tracking-[0.22em] uppercase font-bold mb-3">纯语音录制 · 仅音频</div>
+              <audio src={url} controls className="w-full max-w-md" />
+            </div>
+          ) : (
+            <video src={url} controls className="w-full rounded-xl bg-black" />
+          )
         ) : (
           <div className="text-stone-400 text-sm p-8 text-center">录制为空（可能时长太短或权限被拒）</div>
         )}
@@ -7863,14 +8211,14 @@ const ImprovMode = () => {
     setTimeout(begin, 50);
   };
 
-  if (stage === 'ready') return <ReadyOverlay countdown={preCount} videoRef={cam.videoRef} hint={topic} />;
+  if (stage === 'ready') return <ReadyOverlay countdown={preCount} videoRef={cam.videoRef} voiceOnly={cam.voiceOnly} hint={topic} />;
 
   if (stage === 'recording') {
     const progress = effectiveDuration ? Math.max(0, timeLeft) / effectiveDuration : 0;
     const urgent = effectiveDuration && timeLeft <= 5 && timeLeft > 0;
     return (
       <div className="absolute inset-0 z-[70] bg-stone-950" style={{borderRadius:0}}>
-        <CameraFrame videoRef={cam.videoRef} className="w-full h-full"
+        <CameraFrame videoRef={cam.videoRef} voiceOnly={cam.voiceOnly} streamRef={cam.streamRef} className="w-full h-full"
           overlay={
             <>
               <div className="absolute left-3 right-3 flex items-start justify-between gap-3" style={{top:'calc(env(safe-area-inset-top, 0px) + 12px)'}}>
@@ -7895,7 +8243,7 @@ const ImprovMode = () => {
                   <div className="flex items-center gap-2 bg-[#A30236] text-white px-3 py-1.5 text-[11px] tracking-[0.2em] font-bold" style={{borderRadius:"2px"}}>
                     <span className="w-2 h-2 rounded-full bg-white pulse-rec" />REC
                   </div>
-                  <BeautyButton cam={cam} />
+                  <BeautyButton cam={cam} /><AudienceViewButton cam={cam} />
                 </div>
                 <div className="flex items-center gap-1.5">
                   <button onClick={() => { drawTopic(); setTimeLeft(effectiveDuration); }}
@@ -8119,6 +8467,13 @@ const TeleprompterMode = () => {
   const [extractText, setExtractText] = useState('');
   const [extractLoading, setExtractLoading] = useState(false);
   const [extractError, setExtractError]     = useState('');
+  // ✨ AI 帮我写 60s 稿
+  const [aiTopic, setAiTopic]         = useState('');
+  const [aiDuration, setAiDuration]   = useState(60);
+  const [aiScriptOpen, setAiScriptOpen] = useState(false);
+  const [aiScriptLoading, setAiScriptLoading] = useState(false);
+  const [aiScriptError, setAiScriptError] = useState('');
+  const [aiScriptStructure, setAiScriptStructure] = useState(null); // 上次生成的结构标签
   // 用户自定义模板
   const [userTemplates, setUserTemplates] = useState(() => {
     try { return JSON.parse(localStorage.getItem('kobo.keywordTemplates') || '[]'); } catch { return []; }
@@ -8175,6 +8530,29 @@ const TeleprompterMode = () => {
       setExtractError(e.message);
     } finally {
       setExtractLoading(false);
+    }
+  };
+
+  // ✨ AI 帮我写 60s 稿
+  const aiGenerateScript = async () => {
+    if (!aiTopic.trim()) { setAiScriptError('请先填话题'); return; }
+    setAiScriptLoading(true);
+    setAiScriptError('');
+    setAiScriptStructure(null);
+    try {
+      const r = await deepseekGenerateScript({
+        apiKey: settings.apiKey,
+        topic: aiTopic.trim(),
+        durationSec: aiDuration,
+      });
+      // 灌入主 textarea
+      setText(r.script || '');
+      setAiScriptStructure(r.structure || null);
+      setAiScriptOpen(false); // 关闭面板 · 让用户看到 textarea 已填好
+    } catch (e) {
+      setAiScriptError(e.message);
+    } finally {
+      setAiScriptLoading(false);
     }
   };
 
@@ -8331,7 +8709,7 @@ const TeleprompterMode = () => {
   if (stage === 'recording') {
     return (
       <div className="absolute inset-0 z-[70] bg-stone-950 fade-in" style={{borderRadius:0}}>
-        <CameraFrame videoRef={cam.videoRef} className="w-full h-full"
+        <CameraFrame videoRef={cam.videoRef} voiceOnly={cam.voiceOnly} streamRef={cam.streamRef} className="w-full h-full"
           overlay={
             <>
               {/* 顶部 HUD：REC + 时长 + 美颜 */}
@@ -8340,7 +8718,7 @@ const TeleprompterMode = () => {
                   <div className="flex items-center gap-2 bg-[#A30236] text-white px-3 py-1.5 text-[11px] tracking-[0.2em] font-bold" style={{borderRadius:"2px"}}>
                     <span className="w-2 h-2 rounded-full bg-white pulse-rec" />REC · {formatTime(rec.duration)}
                   </div>
-                  <BeautyButton cam={cam} />
+                  <BeautyButton cam={cam} /><AudienceViewButton cam={cam} />
                 </div>
                 <div className="flex items-center gap-1.5">
                   {voiceFollow && tpMode === 'script' && (
@@ -8656,16 +9034,79 @@ const TeleprompterMode = () => {
       ) : (
         <>
           <Card className="p-6">
-            <div className="flex items-center gap-2.5 mb-4">
+            <div className="flex items-center gap-2.5 mb-4 flex-wrap">
               <div className="w-8 h-8 bg-[#FBEFF2] text-[#A30236] flex items-center justify-center" style={{borderRadius:"3px"}}>
                 <Icon name="document" size={16} strokeWidth={1.7} />
               </div>
               <h3 className="font-display font-bold text-stone-900 text-[16px] m-0">粘贴文案</h3>
+              <button onClick={() => setAiScriptOpen(o => !o)}
+                className="ml-auto flex items-center gap-1 px-2.5 py-1 text-[11px] tracking-wider font-bold bg-gradient-to-r from-purple-100 to-amber-100 text-purple-700 hover:from-purple-200 hover:to-amber-200 transition-all"
+                style={{borderRadius:'3px'}}>
+                <Icon name="sparkle" size={12} /> ✨ AI 帮我写
+              </button>
             </div>
+
+            {/* AI 剧本生成内联面板 */}
+            {aiScriptOpen && (
+              <div className="mb-4 p-3 border-2 border-purple-300 bg-purple-50/50 fade-in" style={{borderRadius:'3px'}}>
+                <div className="text-[10px] text-purple-700 tracking-wider uppercase font-bold mb-2 flex items-center gap-2">
+                  ✨ AI 60 秒剧本生成
+                  <span className="text-stone-400 normal-case tracking-normal">🤖 内容由 AI 生成 · 仅供参考</span>
+                </div>
+                <input type="text"
+                  value={aiTopic}
+                  onChange={e => setAiTopic(e.target.value)}
+                  placeholder="话题（如：为什么我不再追求自律）"
+                  className="w-full px-3 py-2 border border-purple-300 text-sm mb-2"
+                  style={{borderRadius:'2px'}}
+                  disabled={aiScriptLoading}
+                />
+                <div className="flex items-center gap-2 mb-2">
+                  <span className="text-[11px] text-stone-600">时长</span>
+                  {[30, 60, 90, 120].map(d => (
+                    <button key={d} onClick={() => setAiDuration(d)}
+                      className={`px-2 py-1 text-[11px] font-bold ${aiDuration === d ? 'bg-purple-600 text-white' : 'bg-white border border-stone-300 text-stone-600'}`}
+                      style={{borderRadius:'2px'}}
+                      disabled={aiScriptLoading}>
+                      {d}s
+                    </button>
+                  ))}
+                </div>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <button onClick={aiGenerateScript} disabled={aiScriptLoading || !aiTopic.trim()}
+                    className="px-3 py-1.5 text-xs font-bold bg-purple-600 text-white hover:bg-purple-700 transition-colors disabled:opacity-40"
+                    style={{borderRadius:'2px'}}>
+                    {aiScriptLoading ? '思考中...' : '🚀 生成稿子'}
+                  </button>
+                  <button onClick={() => { setAiScriptOpen(false); setAiScriptError(''); }}
+                    className="text-xs text-stone-500 hover:text-stone-800">
+                    收起
+                  </button>
+                  {aiScriptError && <span className="text-[11px] text-red-600">{aiScriptError}</span>}
+                </div>
+                <div className="text-[10px] text-stone-500 mt-2 leading-relaxed">
+                  💡 生成的稿子会自动填到下方文本框 · 你可以再编辑 · {aiDuration}s 大约 {Math.round(aiDuration * 4)} 字
+                </div>
+              </div>
+            )}
+
+            {/* 上次 AI 生成的结构标签（提示用户稿子按什么结构写的） */}
+            {aiScriptStructure && Array.isArray(aiScriptStructure) && aiScriptStructure.length > 0 && (
+              <div className="mb-3 flex flex-wrap items-center gap-1">
+                <span className="text-[10px] text-stone-500 tracking-wider uppercase font-bold mr-1">结构</span>
+                {aiScriptStructure.map((s, i) => (
+                  <React.Fragment key={i}>
+                    <span className="text-[10px] bg-amber-100 text-amber-900 px-1.5 py-0.5 font-bold tracking-wider" style={{borderRadius:'2px'}}>{s}</span>
+                    {i < aiScriptStructure.length - 1 && <span className="text-amber-700 text-[10px] font-bold">→</span>}
+                  </React.Fragment>
+                ))}
+              </div>
+            )}
+
             <textarea
               value={text}
               onChange={e => setText(e.target.value)}
-              placeholder="把你刷到的爆款文案粘贴进来。也可以直接选下方的样本试用。"
+              placeholder="把你刷到的爆款文案粘贴进来 · 或点上方"✨ AI 帮我写"让 AI 生成。也可以直接选下方样本试用。"
               className="w-full h-48 p-4 border border-stone-300 rounded-xl text-sm leading-relaxed focus:outline-none focus:border-amber-400 resize-none"
             />
             <div className="mt-3 flex items-center justify-between text-xs text-stone-500">
@@ -9004,7 +9445,7 @@ const HostMode = () => {
     const currentQ = turns.length && turns[turns.length-1].role === 'host' ? turns[turns.length-1].text : '';
     return (
       <div className="absolute inset-0 z-[70] bg-stone-950 fade-in" style={{borderRadius:0}}>
-        <CameraFrame videoRef={cam.videoRef} className="w-full h-full"
+        <CameraFrame videoRef={cam.videoRef} voiceOnly={cam.voiceOnly} streamRef={cam.streamRef} className="w-full h-full"
           overlay={
             <>
               {/* 顶部 HUD */}
@@ -9086,7 +9527,7 @@ const HostMode = () => {
                         <Icon name={aiVoice ? 'mic' : 'shield'} size={14} />
                       </button>
                     )}
-                    <BeautyButton cam={cam} />
+                    <BeautyButton cam={cam} /><AudienceViewButton cam={cam} />
                     <Btn variant="danger" size="sm" onClick={finish}>结束</Btn>
                   </div>
                 </div>
@@ -9325,12 +9766,12 @@ const TutorialMode = () => {
   }
   if (!currentStep && selected.steps.length) currentStep = selected.steps[selected.steps.length-1];
 
-  if (stage === 'preroll') return <ReadyOverlay countdown={preCount} videoRef={cam.videoRef} hint={`框架：${selected.name} · 话题：${practiceTopic}`} />;
+  if (stage === 'preroll') return <ReadyOverlay countdown={preCount} videoRef={cam.videoRef} voiceOnly={cam.voiceOnly} hint={`框架：${selected.name} · 话题：${practiceTopic}`} />;
 
   if (stage === 'practice') {
     return (
       <div className="absolute inset-0 z-[70] bg-stone-950 fade-in" style={{borderRadius:0}}>
-        <CameraFrame videoRef={cam.videoRef} className="w-full h-full"
+        <CameraFrame videoRef={cam.videoRef} voiceOnly={cam.voiceOnly} streamRef={cam.streamRef} className="w-full h-full"
           overlay={
             <>
               {/* 进度条 + 阶段切片 (top) */}
@@ -9361,7 +9802,7 @@ const TutorialMode = () => {
                 <span className="w-1.5 h-1.5 rounded-full bg-white pulse-rec" />REC
               </div>
               <div className="absolute right-3" style={{top:'calc(env(safe-area-inset-top, 0px) + 92px)'}}>
-                <BeautyButton cam={cam} />
+                <BeautyButton cam={cam} /><AudienceViewButton cam={cam} />
               </div>
               {/* 底部当前提示 */}
               <div className="absolute left-3 right-3" style={{bottom:'calc(env(safe-area-inset-bottom, 0px) + 16px)'}}>
@@ -9813,7 +10254,7 @@ const EndlessMode = () => {
     const presetHint = activePreset
       ? `${activePreset.emoji} ${activePreset.name} · 每 ${effectiveInterval}s 自动换题${activePreset.tip ? ' · ' + activePreset.tip : ''}`
       : `无限模式 · 每 ${effectiveInterval}s 自动换题`;
-    return <ReadyOverlay countdown={preCount} videoRef={cam.videoRef} hint={presetHint} />;
+    return <ReadyOverlay countdown={preCount} videoRef={cam.videoRef} voiceOnly={cam.voiceOnly} hint={presetHint} />;
   }
 
   if (stage === 'running') {
@@ -9834,7 +10275,7 @@ const EndlessMode = () => {
     const activePreset = activePresetId ? SESSION_PRESETS.find(p => p.id === activePresetId) : null;
     return (
       <div className="absolute inset-0 z-[70] bg-stone-950" style={{borderRadius:0}}>
-        <CameraFrame videoRef={cam.videoRef} className="w-full h-full"
+        <CameraFrame videoRef={cam.videoRef} voiceOnly={cam.voiceOnly} streamRef={cam.streamRef} className="w-full h-full"
           overlay={
             <>
               {/* 顶部双条进度：上=本题（深红）下=总训练（琥珀）*/}
@@ -9893,7 +10334,7 @@ const EndlessMode = () => {
                   <div className="flex items-center gap-2 bg-[#A30236] text-white px-2.5 py-1.5 text-[10px] tracking-[0.2em] font-bold" style={{borderRadius: '2px'}}>
                     <span className="w-1.5 h-1.5 rounded-full bg-white pulse-rec" />REC · {formatTime(sessionDuration)}
                   </div>
-                  <BeautyButton cam={cam} />
+                  <BeautyButton cam={cam} /><AudienceViewButton cam={cam} />
                 </div>
                 <div className="flex items-center gap-1.5">
                   {!isLastTopic && (
@@ -10394,7 +10835,7 @@ const LiveMode = () => {
           const x = ((e.clientX - rect.left) / rect.width) * 100;
           spawnHeart(x);
         }}>
-        <CameraFrame videoRef={cam.videoRef} className="w-full h-full"
+        <CameraFrame videoRef={cam.videoRef} voiceOnly={cam.voiceOnly} streamRef={cam.streamRef} className="w-full h-full"
           overlay={
             <>
               {/* 顶部：主播信息 + 关闭 */}
@@ -10483,7 +10924,7 @@ const LiveMode = () => {
                     className="bg-stone-950/60 backdrop-blur w-9 h-9 flex items-center justify-center text-rose-300" style={{borderRadius:'50%'}}>
                     <Icon name="heart" size={18} strokeWidth={1.8}/>
                   </button>
-                  <BeautyButton cam={cam} className="!w-9 !h-9 !px-0 !py-0 !justify-center" />
+                  <BeautyButton cam={cam} className="!w-9 !h-9 !px-0 !py-0 !justify-center" /><AudienceViewButton cam={cam} className="!w-9 !h-9 !px-0 !py-0 !justify-center" />
                 </div>
                 <div className="text-center text-white/50 text-[10px] mt-1.5 pointer-events-none">
                   点屏幕任意位置 = 送 ❤️ · 总点赞 {hearts}
@@ -10643,6 +11084,63 @@ const SettingsPanel = ({ onClose }) => {
             <div>✅ 仅在 App 崩溃时上报<strong>报错信息</strong>给作者修 bug（无任何个人内容 · 走 Sentry · 可关）</div>
             <div>✅ 代码<a href="https://github.com/CharlieLam2025/kobo-trainer" target="_blank" rel="noopener" className="underline font-bold">开源在 GitHub</a> · 可自行审计</div>
           </div>
+        </div>
+
+        {/* 🔔 每日打卡提醒（本地通知 · 仅 Android App 有效） */}
+        <div className="mb-6 pt-6 border-t border-stone-200">
+          <div className="flex items-center gap-2 mb-2 flex-wrap">
+            <label className="text-sm font-medium">🔔 每日打卡提醒</label>
+            <Tag color={s.reminderEnabled ? 'amber' : 'stone'}>{s.reminderEnabled ? '已开启' : '未开启'}</Tag>
+            {typeof window !== 'undefined' && !window.Capacitor && <Tag color="stone">仅 App 端</Tag>}
+          </div>
+          <div className="bg-stone-50 border border-stone-200 p-2.5 mb-3 text-[11px] text-stone-600 leading-relaxed" style={{borderRadius:'2px'}}>
+            每天定时弹个温和提醒"60s 预演一条" · 仅本地通知 · 不联网 · 不上传数据。<br/>
+            <span className="text-amber-700">仅 Android App 端真正可靠 · Web/iOS 浏览器需要保持页面打开</span>
+          </div>
+          <div className="flex items-center gap-3 flex-wrap">
+            <button onClick={() => s.setReminderEnabled(!s.reminderEnabled)}
+              className={`px-3 py-1.5 text-xs font-bold transition-colors ${s.reminderEnabled ? 'bg-[#A30236] text-white' : 'bg-stone-100 text-stone-700 hover:bg-stone-200'}`}
+              style={{borderRadius:'2px'}}>
+              {s.reminderEnabled ? '✓ 已开启 · 点击关闭' : '🔔 开启提醒'}
+            </button>
+            <label className="text-xs text-stone-600 flex items-center gap-2">
+              提醒时间
+              <input type="time"
+                value={s.reminderTime}
+                onChange={e => s.setReminderTime(e.target.value)}
+                disabled={!s.reminderEnabled}
+                className="px-2 py-1 border border-stone-300 text-xs font-mono disabled:opacity-40"
+                style={{borderRadius:'2px'}} />
+            </label>
+          </div>
+        </div>
+
+        {/* 🎙️ 录制模式 · 纯语音 / 完整视频 */}
+        <div className="mb-6 pt-6 border-t border-stone-200">
+          <div className="flex items-center gap-2 mb-2 flex-wrap">
+            <label className="text-sm font-medium">🎙️ 录制模式</label>
+            <Tag color={s.voiceOnly ? 'amber' : 'stone'}>{s.voiceOnly ? '仅录音' : '视频 + 音频'}</Tag>
+          </div>
+          <div className="bg-stone-50 border border-stone-200 p-2.5 mb-3 text-[11px] text-stone-600 leading-relaxed" style={{borderRadius:'2px'}}>
+            纯语音模式：不开摄像头 · 只录声音 · 节电 + 隐私友好 · 适合"先练声音再练镜头"
+          </div>
+          <div className="flex gap-2">
+            <button onClick={() => s.setVoiceOnly(false)}
+              className={`flex-1 px-3 py-2 text-xs font-bold transition-colors ${!s.voiceOnly ? 'bg-[#A30236] text-white' : 'bg-stone-100 text-stone-700 hover:bg-stone-200'}`}
+              style={{borderRadius:'2px'}}>
+              📹 完整视频
+            </button>
+            <button onClick={() => s.setVoiceOnly(true)}
+              className={`flex-1 px-3 py-2 text-xs font-bold transition-colors ${s.voiceOnly ? 'bg-[#A30236] text-white' : 'bg-stone-100 text-stone-700 hover:bg-stone-200'}`}
+              style={{borderRadius:'2px'}}>
+              🎙️ 纯语音
+            </button>
+          </div>
+          {s.voiceOnly && (
+            <div className="mt-3 text-[11px] text-amber-700 bg-amber-50 border border-amber-200 px-2.5 py-1.5" style={{borderRadius:'3px'}}>
+              💡 已切到纯语音 · 美颜 / 滤镜 / 背景虚化暂时无效 · 录制时显示音频波形
+            </div>
+          )}
         </div>
 
         <div className="mb-6 pt-6 border-t border-stone-200">
@@ -10867,6 +11365,38 @@ function App() {
   });
   const saveDirRef = useRef(null); // saveDir 可能 stale，用 ref 给 removeSavedFile 用
 
+  // 🎙️ 纯语音模式（不开摄像头 · 节电 + 隐私 · 仅录音）
+  const [voiceOnly, setVoiceOnlyState] = useState(() => {
+    try { return localStorage.getItem('kobo.voiceOnly') === '1'; } catch { return false; }
+  });
+  const setVoiceOnly = useCallback((v) => {
+    setVoiceOnlyState(v);
+    try { localStorage.setItem('kobo.voiceOnly', v ? '1' : '0'); } catch {}
+  }, []);
+
+  // 🔔 本地推送提醒（仅 Capacitor / Android · Web 端有限支持）
+  const [reminderEnabled, setReminderEnabledState] = useState(() => {
+    try { return localStorage.getItem('kobo.reminderEnabled') === '1'; } catch { return false; }
+  });
+  const [reminderTime, setReminderTimeState] = useState(() => {
+    try { return localStorage.getItem('kobo.reminderTime') || '19:00'; } catch { return '19:00'; }
+  });
+  const setReminderEnabled = useCallback((v) => {
+    setReminderEnabledState(v);
+    try { localStorage.setItem('kobo.reminderEnabled', v ? '1' : '0'); } catch {}
+  }, []);
+  const setReminderTime = useCallback((t) => {
+    setReminderTimeState(t);
+    try { localStorage.setItem('kobo.reminderTime', t); } catch {}
+  }, []);
+  // 当 enabled / time 变化 · 重新调度
+  useEffect(() => {
+    const [h, m] = reminderTime.split(':').map(x => parseInt(x) || 0);
+    scheduleDailyReminder({ hour: h, minute: m, enabled: reminderEnabled }).then(r => {
+      console.log('[Reminder]', r);
+    });
+  }, [reminderEnabled, reminderTime]);
+
   // 已"见过"的成就（避免每次访问都弹动画）
   const [unlockedAchievements, setUnlockedAchievementsState] = useState(() => {
     try { return JSON.parse(localStorage.getItem('kobo.unlockedAchievements') || '[]'); } catch { return []; }
@@ -11011,7 +11541,9 @@ function App() {
     unlockedAchievements, markAchievementsSeen,
     lastWeeklyRecap, setLastWeeklyRecap,
     restDays, addRestDay, removeRestDay,
-  }), [apiKey, userApiKey, isBuiltinKey, setApiKey, saveDir, savedFiles, addSavedFile, updateSavedFile, removeSavedFile, clearAllSavedFiles, dailyGoal, setDailyGoal, unlockedAchievements, markAchievementsSeen, lastWeeklyRecap, setLastWeeklyRecap, restDays, addRestDay, removeRestDay]);
+    voiceOnly, setVoiceOnly,
+    reminderEnabled, setReminderEnabled, reminderTime, setReminderTime,
+  }), [apiKey, userApiKey, isBuiltinKey, setApiKey, saveDir, savedFiles, addSavedFile, updateSavedFile, removeSavedFile, clearAllSavedFiles, dailyGoal, setDailyGoal, unlockedAchievements, markAchievementsSeen, lastWeeklyRecap, setLastWeeklyRecap, restDays, addRestDay, removeRestDay, voiceOnly, setVoiceOnly, reminderEnabled, setReminderEnabled, reminderTime, setReminderTime]);
 
   // Mode → title for MobileHeader
   const headerSub = useMemo(() => {
