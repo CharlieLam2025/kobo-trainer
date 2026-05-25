@@ -23,7 +23,27 @@
 <link rel="apple-touch-startup-image" media="(device-width: 375px) and (device-height: 812px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)" href="ios-splash/iphone-xs.png">
 <link rel="apple-touch-startup-image" media="(device-width: 414px) and (device-height: 896px) and (-webkit-device-pixel-ratio: 2) and (orientation: portrait)" href="ios-splash/iphone-xr.png">
 <link rel="apple-touch-startup-image" media="(device-width: 375px) and (device-height: 667px) and (-webkit-device-pixel-ratio: 2) and (orientation: portrait)" href="ios-splash/iphone-8.png">
-<script src="https://cdn.tailwindcss.com"></script>
+<!-- Tailwind · 主用 jsdelivr（中国友好）· 失败时尝试官方 -->
+<script>
+  (function loadTailwind() {
+    var primary = 'https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4';
+    var fallback = 'https://cdn.tailwindcss.com';
+    function tryLoad(src, next) {
+      var s = document.createElement('script');
+      s.src = src; s.onerror = next; s.onload = function() {
+        var st = document.getElementById('kobo-boot-status');
+        if (st) st.textContent = '✓ 样式表 · 继续加载...';
+      };
+      document.head.appendChild(s);
+    }
+    // 优先用官方（更稳）· jsdelivr 兼容性还在跟进
+    tryLoad('https://cdn.tailwindcss.com', function() {
+      tryLoad('https://unpkg.com/tailwindcss@3.4.1/lib/index.css', function() {
+        console.warn('[kobo] Tailwind 全部 CDN 都加载失败');
+      });
+    });
+  })();
+</script>
 <script>
   /* RANEPA palette remapped onto Tailwind's amber/stone scales so the entire
      existing component tree picks it up automatically. */
@@ -115,9 +135,22 @@
     document.head.appendChild(s);
   }
 </script>
-<script crossorigin src="https://unpkg.com/react@18.3.1/umd/react.production.min.js"></script>
-<script crossorigin src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js"></script>
-<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<!-- React + ReactDOM + Babel · 用 jsdelivr（在国内更稳）· unpkg 在某些 ISP 被墙 -->
+<script crossorigin src="https://cdn.jsdelivr.net/npm/react@18.3.1/umd/react.production.min.js"></script>
+<script crossorigin src="https://cdn.jsdelivr.net/npm/react-dom@18.3.1/umd/react-dom.production.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@babel/standalone@7.25.0/babel.min.js"></script>
+<!-- fallback：若 jsdelivr 失败 · 回退到 unpkg（适用国际用户） -->
+<script>
+  if (!window.React) {
+    document.write('<script crossorigin src="https://unpkg.com/react@18.3.1/umd/react.production.min.js"><\/script>');
+  }
+  if (!window.ReactDOM) {
+    document.write('<script crossorigin src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js"><\/script>');
+  }
+  if (!window.Babel) {
+    document.write('<script src="https://unpkg.com/@babel/standalone/babel.min.js"><\/script>');
+  }
+</script>
 <!-- MediaPipe Face Landmarker（懒加载：用户开启美颜面部 FX 时才真正初始化）-->
 <script type="module">
   // 预解析 ESM 模块，挂到全局；若网络/沙箱拦截则静默失败，cam 退回纯 CSS 滤镜路径
@@ -304,7 +337,35 @@
 </style>
 </head>
 <body class="bg-paper font-body">
-<div id="root"></div>
+<div id="root">
+  <div id="kobo-boot" style="position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;background:#FAFAF9;color:#1c1917;font-family:system-ui,-apple-system,sans-serif;padding:24px;text-align:center">
+    <div style="font-size:64px;margin-bottom:16px">🎙️</div>
+    <div style="font-weight:800;font-size:18px;letter-spacing:-0.01em;margin-bottom:8px">口播练习器加载中</div>
+    <div id="kobo-boot-status" style="font-size:12px;color:#78716c;line-height:1.6;max-width:380px">正在准备资源...</div>
+    <div id="kobo-boot-diag" style="margin-top:16px;font-size:11px;color:#A30236;font-family:ui-monospace,monospace;white-space:pre-wrap;text-align:left;display:none"></div>
+  </div>
+</div>
+<script>
+  // 8 秒还没启动 → 显示诊断信息，告诉用户具体哪个资源没加载上
+  window.__koboBootStart = Date.now();
+  setTimeout(function() {
+    var boot = document.getElementById('kobo-boot');
+    if (!boot) return; // React 已挂载就把这个 div 替换了
+    var status = document.getElementById('kobo-boot-status');
+    var diag = document.getElementById('kobo-boot-diag');
+    if (status) status.innerHTML = '⚠️ 加载超时 · 看起来某个资源没下载到<br/><br/>常见原因：你的网络屏蔽了 CDN（如 unpkg.com）<br/>解决：连一个能访问国外 CDN 的网络 / 装 1.0.12+';
+    if (diag) {
+      diag.style.display = 'block';
+      diag.textContent = '诊断（' + Math.round((Date.now() - window.__koboBootStart) / 1000) + 's）\n' +
+        '─────────────\n' +
+        'Tailwind  : ' + (window.tailwind ? '✓' : '✗ 未加载') + '\n' +
+        'React     : ' + (window.React ? '✓' : '✗ 未加载') + '\n' +
+        'ReactDOM  : ' + (window.ReactDOM ? '✓' : '✗ 未加载') + '\n' +
+        'Babel     : ' + (window.Babel ? '✓' : '✗ 未加载') + '\n' +
+        'MediaPipe : ' + (window.__MEDIAPIPE ? '✓' : '○ 可选');
+    }
+  }, 8000);
+</script>
 <script type="text/babel" data-presets="react">
 const { useState, useEffect, useRef, useMemo, useCallback } = React;
 
