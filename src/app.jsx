@@ -6075,28 +6075,16 @@ const groupByDay = (files) => {
   files.forEach(f => { const k = dayKey(f.ts); m[k] = (m[k]||0) + 1; });
   return m;
 };
-const maxPerDay = (files) => Math.max(0, ...Object.values(groupByDay(files)));
-const totalUniqueDays = (files) => Object.keys(groupByDay(files)).length;
-
 // 测试函数：参数 (files, streak)
+// 6 个核心徽章：1 个破冰 + 3 个连续 streak（早期/月/年）+ 2 个累计里程碑
+// 设计原则：每个徽章对应一个真正能改变用户行为的拐点 · 多了反而稀释成就感
 const ACHIEVEMENTS = [
-  { id:'first',        emoji:'🎬', name:'破冰',         desc:'录下第一条预演',         test:(f)=>f.length>=1 },
-  { id:'first_minute', emoji:'⏱',  name:'破冰一分钟',   desc:'第一次录到 60 秒',       test:(f)=>f.some(x=>(x.duration||0)>=60) },
-  { id:'first_3min',   emoji:'📜', name:'长篇大论',     desc:'单条录到 3 分钟',        test:(f)=>f.some(x=>(x.duration||0)>=180) },
-  { id:'streak3',      emoji:'🔥', name:'连续 3 天',    desc:'连续 3 天达成目标',      test:(_,s)=>s>=3 },
-  { id:'streak7',      emoji:'⭐', name:'连续 7 天',    desc:'坚持一周',               test:(_,s)=>s>=7 },
-  { id:'streak14',     emoji:'🌟', name:'连续 14 天',   desc:'坚持两周',               test:(_,s)=>s>=14 },
-  { id:'streak30',     emoji:'👑', name:'连续 30 天',   desc:'连续一个月',             test:(_,s)=>s>=30 },
-  { id:'streak100',    emoji:'💎', name:'连续 100 天',  desc:'当之无愧的坚持者',       test:(_,s)=>s>=100 },
-  { id:'total10',      emoji:'📿', name:'录满 10 条',   desc:'10 次开口的勇气',        test:(f)=>f.length>=10 },
-  { id:'total50',      emoji:'🏅', name:'录满 50 条',   desc:'量变正在积累',           test:(f)=>f.length>=50 },
-  { id:'total100',     emoji:'🏆', name:'录满 100 条',  desc:'已经是高频自媒体人',     test:(f)=>f.length>=100 },
-  { id:'total500',     emoji:'🥇', name:'录满 500 条',  desc:'你已是创作机器',         test:(f)=>f.length>=500 },
-  { id:'sprint5',      emoji:'⚡', name:'单日冲刺 5',   desc:'一天录满 5 条',          test:(f)=>maxPerDay(f)>=5 },
-  { id:'sprint10',     emoji:'🚀', name:'单日狂飙 10',  desc:'一天录满 10 条',         test:(f)=>maxPerDay(f)>=10 },
-  { id:'early_bird',   emoji:'🐣', name:'早起鸟',       desc:'早 7 点前录过一条',      test:(f)=>f.some(x=>new Date(x.ts||0).getHours()<7 && (x.ts||0)>0) },
-  { id:'night_owl',    emoji:'🦉', name:'夜猫子',       desc:'凌晨 1-5 点录过一条',     test:(f)=>f.some(x=>{const h=new Date(x.ts||0).getHours(); return h>=1 && h<5;}) },
-  { id:'days30',       emoji:'📆', name:'活跃 30 天',   desc:'累计 30 个不同日子有录',  test:(f)=>totalUniqueDays(f)>=30 },
+  { id:'first',     emoji:'🎬', name:'破冰',         desc:'录下第一条预演',     test:(f)=>f.length>=1 },
+  { id:'streak3',   emoji:'🔥', name:'连续 3 天',    desc:'连续 3 天达成目标',  test:(_,s)=>s>=3 },
+  { id:'streak7',   emoji:'⭐', name:'连续 7 天',    desc:'坚持一周 · 习惯萌芽', test:(_,s)=>s>=7 },
+  { id:'streak30',  emoji:'👑', name:'连续 30 天',   desc:'坚持一个月 · 习惯成型', test:(_,s)=>s>=30 },
+  { id:'total100',  emoji:'🏆', name:'录满 100 条',  desc:'已经是高频自媒体人', test:(f)=>f.length>=100 },
+  { id:'total500',  emoji:'🥇', name:'录满 500 条',  desc:'你已是创作机器',     test:(f)=>f.length>=500 },
 ];
 
 // 检测从 prev → next 新解锁的 ID
@@ -9731,7 +9719,7 @@ const ONBOARDING_SLIDES = [
     bullets: [
       '每日目标可自定义（条数 + 时长）',
       '月历热力图 · 看到一年的形状',
-      '17 个成就徽章 · 解锁的正反馈',
+      '6 个核心徽章 · 真正的拐点才发奖',
       '每周复盘弹窗 · 数据化看进步',
     ],
   },
