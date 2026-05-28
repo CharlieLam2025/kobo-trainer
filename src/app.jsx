@@ -4023,22 +4023,16 @@ const useSettings = () => React.useContext(SettingsContext);
 //   1) blur 控制极轻（0.25 – 0.7 px），主要给观感上一层"柔焦"
 //   2) 重头戏放在 brightness / saturate / hue-rotate / sepia 这些**调色**参数
 //      上 —— 调出来的肤色变化更接近真正的"美颜"，而不是糊。
+// 第一性原理：「让你能看见自己 · 而不是看见你想象中的自己」
+// 训练工具不需要 8 种调色 · 砍到 3 套：原图 / 柔光（自然提亮）/ 复古（暖调兜底）
+// 砍掉：奶油 / 粉嫩 / 冷白 / 港风 / 黑白 ·
+// 这些是「让自己变成另一个样子」的滤镜 · 不是「让你能看着自己讲话」的滤镜
 const FILTER_PRESETS = [
   { id: 'none',    name: '原图', css: '' },
   // 柔光 —— 自然系，皮肤稍提亮 + 微暖 + 微饱和
   { id: 'soft',    name: '柔光', css: 'brightness(1.04) saturate(1.10) contrast(0.97) hue-rotate(-3deg)' },
-  // 奶油 —— 高亮低对比，奶白干净
-  { id: 'cream',   name: '奶油', css: 'brightness(1.10) contrast(0.93) saturate(1.04) sepia(0.06)' },
-  // 粉嫩 —— 偏暖偏红，气色更好
-  { id: 'rosy',    name: '粉嫩', css: 'brightness(1.06) saturate(1.18) sepia(0.05) hue-rotate(-7deg)' },
-  // 冷白皮 —— 偏冷偏蓝，去黄
-  { id: 'coolw',   name: '冷白', css: 'brightness(1.08) saturate(0.92) hue-rotate(8deg)' },
-  // 港风 —— 高对比 + 偏暖偏红 + 微胶片
-  { id: 'hkfilm',  name: '港风', css: 'brightness(0.97) contrast(1.14) saturate(1.18) sepia(0.12) hue-rotate(-9deg)' },
-  // 复古 —— 低饱和 + 棕调
+  // 复古 —— 低饱和 + 棕调 · 暖色兜底
   { id: 'vintage', name: '复古', css: 'brightness(0.95) contrast(1.06) saturate(0.78) sepia(0.24)' },
-  // 黑白
-  { id: 'bw',      name: '黑白', css: 'grayscale(1) contrast(1.08)' },
 ];
 
 // 美颜强度 —— 大幅降低 blur 上限（之前 1.3px 太糊）
@@ -4067,11 +4061,10 @@ const computeFilterCSS = (presetId, level) => {
 // 显示用的 video 元素直接绑 raw stream + CSS filter（同样的效果，但走 GPU 渲染更顺）。
 // MediaRecorder 接 canvas.captureStream() —— 滤镜直接烧进录像。
 // ===== MediaPipe Face Landmark 索引（478 点中我们关心的） =====
+// 砍掉了瘦脸 / 大眼 · 只剩真磨皮需要 face oval 36 点
 const FACE_OVAL_IDX = [10,338,297,332,284,251,389,356,454,323,361,288,397,365,379,378,400,377,152,148,176,149,150,136,172,58,132,93,234,127,162,21,54,103,67,109];
-const LEFT_EYE_IDX  = [33,246,161,160,159,158,157,173,133,155,154,153,145,144,163,7];
-const RIGHT_EYE_IDX = [263,466,388,387,386,385,384,398,362,382,381,380,374,373,390,249];
 
-// 构造路径 + bounding box（landmarks 已经做过 mirror，所以 x 是显示坐标）
+// 构造路径（landmarks 已经做过 mirror，所以 x 是显示坐标）
 const tracePath = (ctx, lm, idx, w, h) => {
   ctx.beginPath();
   for (let i = 0; i < idx.length; i++) {
@@ -4080,16 +4073,6 @@ const tracePath = (ctx, lm, idx, w, h) => {
     else         ctx.lineTo(p.x * w, p.y * h);
   }
   ctx.closePath();
-};
-const bboxOf = (lm, idx, w, h) => {
-  let minX=Infinity,minY=Infinity,maxX=-Infinity,maxY=-Infinity;
-  for (const i of idx) {
-    const p = lm[i];
-    const x = p.x*w, y = p.y*h;
-    if (x<minX) minX=x; if (y<minY) minY=y;
-    if (x>maxX) maxX=x; if (y>maxY) maxY=y;
-  }
-  return { x:minX, y:minY, w:maxX-minX, h:maxY-minY, cx:(minX+maxX)/2, cy:(minY+maxY)/2 };
 };
 
 // 带 progress 的 fetch · 用于 MediaPipe wasm/model 预热缓存
@@ -4140,18 +4123,15 @@ function useCamera() {
 
   const [filterPreset, setFilterPreset] = useState('none');
   const [beautyLevel,  setBeautyLevel]  = useState(0);
-  // 真磨皮 / 大眼 / 瘦脸 / 背景虚化（0-1 浮点）
+  // 真磨皮 / 背景虚化（0-1 浮点）· 砍掉瘦脸 / 大眼
+  // 第一性原理：训练工具不变形脸 · 只柔焦皮肤 + 模糊背景 · 让你看到的是真的你 · 只是更舒服
   const [skinSmooth,   setSkinSmooth]   = useState(0);
-  const [faceSlim,     setFaceSlim]     = useState(0);
-  const [eyeEnlarge,   setEyeEnlarge]   = useState(0);
   const [bgBlur,       setBgBlur]       = useState(0);
   const [faceFxReady,  setFaceFxReady]  = useState(false); // MediaPipe 是否加载就绪
   const [faceFxLoading,setFaceFxLoading]= useState(false);
   // 0-100 · 用 fetchWithProgress 预热缓存的实时进度 · 让用户知道在下东西 · 不是 app 卡死
   const [faceFxProgress, setFaceFxProgress] = useState(0);
   const skinRef = useRef(0); skinRef.current = skinSmooth;
-  const slimRef = useRef(0); slimRef.current = faceSlim;
-  const enlargeRef = useRef(0); enlargeRef.current = eyeEnlarge;
   const bgBlurRef = useRef(0); bgBlurRef.current = bgBlur;
 
   const [active, setActive] = useState(false);
@@ -4245,13 +4225,13 @@ function useCamera() {
 
   // 任意面部 FX 强度变化 → 触发初始化
   useEffect(() => {
-    if ((skinSmooth + faceSlim + eyeEnlarge) > 0) {
+    if (skinSmooth > 0) {
       ensureLandmarker();
     }
     if (bgBlur > 0) {
       ensureSegmenter();
     }
-  }, [skinSmooth, faceSlim, eyeEnlarge, bgBlur, ensureLandmarker, ensureSegmenter]);
+  }, [skinSmooth, bgBlur, ensureLandmarker, ensureSegmenter]);
 
   const attachVideo = useCallback((el) => {
     videoElRef.current = el;
@@ -4316,8 +4296,8 @@ function useCamera() {
           if (canvas.height !== hv.videoHeight) { canvas.height = hv.videoHeight; scratch.height = hv.videoHeight; }
 
           const W = canvas.width, H = canvas.height;
-          const skin = skinRef.current, slim = slimRef.current, eye = enlargeRef.current;
-          const needFx = (skin + slim + eye) > 0;
+          const skin = skinRef.current;
+          const needFx = skin > 0;
 
           // 面部检测（限频）
           if (needFx && landmarkerRef.current) {
@@ -4340,73 +4320,23 @@ function useCamera() {
           ctx.drawImage(hv, -W, 0, W, H);
           ctx.restore();
 
-          // 第二步：如果检测到人脸 + 用户开启了面部 FX → 在主 canvas 上做形变/磨皮
-          if (cachedLandmarks && needFx) {
+          // 第二步：如果检测到人脸 + 用户开启了真磨皮 → 在主 canvas 上局部柔焦
+          // 砍掉了瘦脸 / 大眼形变 · 训练工具不变形脸 · 只在皮肤区域柔焦
+          if (cachedLandmarks && needFx && skin > 0) {
             // landmarks 来自原始视频，但主 canvas 是镜像的，所以 x 要反向
             const lm = cachedLandmarks.map(p => ({ x: 1 - p.x, y: p.y }));
-
-            // === 瘦脸 === 把整个 face oval 水平方向压缩，留下的窄缝由原图填充
-            if (slim > 0) {
-              const face = bboxOf(lm, FACE_OVAL_IDX, W, H);
-              const scaleX = 1 - slim * 0.10; // 最多窄 10%
-              const margin = Math.max(face.w * 0.15, 20);
-              const sx = Math.max(0, face.x - margin);
-              const sy = Math.max(0, face.y - margin);
-              const sw = Math.min(W - sx, face.w + 2 * margin);
-              const sh = Math.min(H - sy, face.h + 2 * margin);
-              // 把当前帧的面部区域拷到 scratch
-              sctx.clearRect(0, 0, W, H);
-              sctx.drawImage(canvas, sx, sy, sw, sh, sx, sy, sw, sh);
-              // 在主 canvas 用 face oval clip + scale 重画
-              const newW = sw * scaleX;
-              const newX = face.cx - (face.cx - sx) * scaleX;
-              ctx.save();
-              tracePath(ctx, lm, FACE_OVAL_IDX, W, H);
-              ctx.clip();
-              ctx.drawImage(scratch, sx, sy, sw, sh, newX, sy, newW, sh);
-              ctx.restore();
-            }
-
-            // === 真磨皮 === face oval 内部叠加 blur 版本（局部柔焦）
-            if (skin > 0) {
-              const blurPx = 5 + skin * 9; // 强度 0→1 时 5→14 px
-              sctx.clearRect(0, 0, W, H);
-              try { sctx.filter = `blur(${blurPx}px)`; } catch {}
-              sctx.drawImage(canvas, 0, 0);
-              try { sctx.filter = 'none'; } catch {}
-              ctx.save();
-              tracePath(ctx, lm, FACE_OVAL_IDX, W, H);
-              ctx.clip();
-              ctx.globalAlpha = Math.min(0.92, skin * 0.85);
-              ctx.drawImage(scratch, 0, 0);
-              ctx.globalAlpha = 1;
-              ctx.restore();
-            }
-
-            // === 大眼 === 双眼区域 + 放大重绘
-            if (eye > 0) {
-              const scale = 1 + eye * 0.22; // 最多 22% 大
-              for (const eyeIdx of [LEFT_EYE_IDX, RIGHT_EYE_IDX]) {
-                const e = bboxOf(lm, eyeIdx, W, H);
-                const pad = Math.max(e.w * 0.6, 12);
-                const sx = Math.max(0, e.x - pad);
-                const sy = Math.max(0, e.y - pad);
-                const sw = Math.min(W - sx, e.w + 2 * pad);
-                const sh = Math.min(H - sy, e.h + 2 * pad);
-                sctx.clearRect(0, 0, W, H);
-                sctx.drawImage(canvas, sx, sy, sw, sh, sx, sy, sw, sh);
-                const newW = sw * scale, newH = sh * scale;
-                const newX = e.cx - (e.cx - sx) * scale;
-                const newY = e.cy - (e.cy - sy) * scale;
-                // 用椭圆 clip 给个柔边
-                ctx.save();
-                ctx.beginPath();
-                ctx.ellipse(e.cx, e.cy, sw * 0.45, sh * 0.45, 0, 0, Math.PI * 2);
-                ctx.clip();
-                ctx.drawImage(scratch, sx, sy, sw, sh, newX, newY, newW, newH);
-                ctx.restore();
-              }
-            }
+            const blurPx = 5 + skin * 9; // 强度 0→1 时 5→14 px
+            sctx.clearRect(0, 0, W, H);
+            try { sctx.filter = `blur(${blurPx}px)`; } catch {}
+            sctx.drawImage(canvas, 0, 0);
+            try { sctx.filter = 'none'; } catch {}
+            ctx.save();
+            tracePath(ctx, lm, FACE_OVAL_IDX, W, H);
+            ctx.clip();
+            ctx.globalAlpha = Math.min(0.92, skin * 0.85);
+            ctx.drawImage(scratch, 0, 0);
+            ctx.globalAlpha = 1;
+            ctx.restore();
           }
 
           // 第三步：背景虚化 —— 用 selfie 分割把人物保留清晰、背景做高斯模糊
@@ -4546,8 +4476,6 @@ function useCamera() {
     filterPreset, setFilterPreset,
     beautyLevel,  setBeautyLevel,
     skinSmooth,   setSkinSmooth,
-    faceSlim,     setFaceSlim,
-    eyeEnlarge,   setEyeEnlarge,
     bgBlur,       setBgBlur,
     faceFxReady,  faceFxLoading,  faceFxProgress,
     voiceOnly: voiceOnlySetting,
@@ -4939,11 +4867,7 @@ const FilterSheet = ({ cam, onClose }) => {
           )}
           <div className="space-y-2.5">
             <Slider label="真磨皮" value={cam.skinSmooth} onChange={cam.setSkinSmooth}
-              hint="检测人脸 · 仅在皮肤区域柔焦，眼睛头发保留清晰" />
-            <Slider label="瘦脸" value={cam.faceSlim} onChange={cam.setFaceSlim}
-              hint="水平方向轻微挤压 · 最大 10%" />
-            <Slider label="大眼" value={cam.eyeEnlarge} onChange={cam.setEyeEnlarge}
-              hint="双眼区域放大 · 最大 22%" />
+              hint="只在皮肤区域柔焦 · 眼睛头发保留清晰 · 不变形" />
           </div>
 
           <div className="text-[10px] text-white/50 uppercase tracking-[0.2em] font-bold pt-2 flex items-center gap-2">
@@ -4977,8 +4901,7 @@ const FilterSheet = ({ cam, onClose }) => {
 const BeautyButton = ({ cam, style = {}, className = '' }) => {
   const [open, setOpen] = useState(false);
   const on = cam.filterPreset !== 'none' || cam.beautyLevel > 0
-          || cam.skinSmooth > 0 || cam.faceSlim > 0 || cam.eyeEnlarge > 0
-          || cam.bgBlur > 0;
+          || cam.skinSmooth > 0 || cam.bgBlur > 0;
   return (
     <>
       <button onClick={() => setOpen(true)}
@@ -5005,15 +4928,13 @@ const AudienceViewButton = ({ cam, style = {}, className = '' }) => {
     if (previewing) return;
     // 没开美颜/滤镜 → 没意义，给提示但仍然让 toast 显示
     const anyBeauty = cam.filterPreset !== 'none' || cam.beautyLevel > 0
-      || cam.skinSmooth > 0 || cam.faceSlim > 0 || cam.eyeEnlarge > 0 || cam.bgBlur > 0;
+      || cam.skinSmooth > 0 || cam.bgBlur > 0;
 
     // 保存当前状态
     setSavedState({
       filterPreset: cam.filterPreset,
       beautyLevel: cam.beautyLevel,
       skinSmooth: cam.skinSmooth,
-      faceSlim: cam.faceSlim,
-      eyeEnlarge: cam.eyeEnlarge,
       bgBlur: cam.bgBlur,
       anyBeauty,
     });
@@ -5021,8 +4942,6 @@ const AudienceViewButton = ({ cam, style = {}, className = '' }) => {
     cam.setFilterPreset('none');
     cam.setBeautyLevel(0);
     cam.setSkinSmooth(0);
-    cam.setFaceSlim(0);
-    cam.setEyeEnlarge(0);
     cam.setBgBlur(0);
     setPreviewing(true);
     setRemaining(5);
@@ -5045,8 +4964,6 @@ const AudienceViewButton = ({ cam, style = {}, className = '' }) => {
       cam.setFilterPreset(s.filterPreset);
       cam.setBeautyLevel(s.beautyLevel);
       cam.setSkinSmooth(s.skinSmooth);
-      cam.setFaceSlim(s.faceSlim);
-      cam.setEyeEnlarge(s.eyeEnlarge);
       cam.setBgBlur(s.bgBlur);
     }
     cleanup();
