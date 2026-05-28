@@ -5241,12 +5241,23 @@ const DoneView = ({ blob, contextLabel, duration = 0, onRetry, onNew, extra, tra
       softStreak++;
       softCursor -= 86400000;
     }
+    // 「断了几天回来」检测 · 用于 streak repair 文案
+    // returnGap = N 表示「上次录像在 N 天前」· null 表示没有历史录像
+    // returnGap >= 2 等价于「至少跳过了昨天一天」
+    const pastFiles = files.filter(f => (f.ts || 0) < today0);
+    let returnGap = null;
+    if (pastFiles.length > 0) {
+      const lastTs = Math.max(...pastFiles.map(f => f.ts || 0));
+      const lastDay0 = startOfDay(new Date(lastTs));
+      returnGap = Math.round((today0 - lastDay0) / 86400000);
+    }
     return {
       todayCount: todayQualifying, goalCount: goal.count, streak,
       justHitGoal, newlyUnlocked, remaining: Math.max(0, goal.count - todayQualifying),
       qualified: (duration || 0) >= minDur,
       softStreak,
       isFirstOfDay: allTodayFiles.length === 1,
+      returnGap,
     };
   }, [settings.savedFiles, settings.dailyGoal, settings.unlockedAchievements, duration]);
 
@@ -5261,16 +5272,44 @@ const DoneView = ({ blob, contextLabel, duration = 0, onRetry, onNew, extra, tra
 
   return (
     <div className="fade-in">
-      {/* 习惯科学小奖：前 7 天每天首次录像 · 一句针对当天心理的话 · 不弹 toast 而是嵌入卡片 */}
-      {blob && feedbackStats.isFirstOfDay && feedbackStats.softStreak >= 1 && feedbackStats.softStreak <= 7 && STREAK_DAY_MESSAGES[feedbackStats.softStreak] && (() => {
-        const m = STREAK_DAY_MESSAGES[feedbackStats.softStreak];
+      {/* 习惯科学小奖 · 三态：
+            1. 前 7 天每天首次录像（softStreak 1-7，无 break）→ STREAK_DAY_MESSAGES
+            2. 断了 1-7 天回来（returnGap >= 2 且 <= 7，softStreak === 1）→ recovery 「never miss twice」
+            3. 断了 8+ 天回来 → recovery 「久违的 Day 1」
+      */}
+      {blob && feedbackStats.isFirstOfDay && (() => {
+        const { softStreak, returnGap } = feedbackStats;
+        let m = null;
+        let eyebrowLabel = `DAY ${softStreak} · 习惯科学`;
+        if (softStreak === 1 && returnGap !== null && returnGap >= 2) {
+          // 断了至少一天回来 · 用 recovery 文案
+          if (returnGap === 2) {
+            m = { emoji:'🤝', color:'#F1A23F',
+                  title:'昨天空了 · 今天又开始了 · 这就够',
+                  body:'习惯学有一条「never miss twice」规则 · 你今天做到了 · 比那些「等明天再说」的人强。' };
+            eyebrowLabel = 'STREAK REPAIR · 昨天空了一天';
+          } else if (returnGap <= 7) {
+            m = { emoji:'🌱', color:'#10b981',
+                  title:'回来了 · 这次的 Day 1 比上次的更有意义',
+                  body:`${returnGap - 1} 天没录 · 不算很久。断过的人才更知道这个习惯有多脆 · 现在重新走。` };
+            eyebrowLabel = `RESTART · 跳过了 ${returnGap - 1} 天`;
+          } else {
+            m = { emoji:'🌅', color:'#A30236',
+                  title:'好久没见 · 重新开始',
+                  body:`${returnGap} 天前你录过 · 那条还在你手机里。今天再录一条 · 重新走 Day 1。` };
+            eyebrowLabel = '回归 · 久违的 Day 1';
+          }
+        } else if (softStreak >= 1 && softStreak <= 7) {
+          m = STREAK_DAY_MESSAGES[softStreak] || null;
+        }
+        if (!m) return null;
         return (
           <Card className="mb-4 p-4 bg-stone-50 border-l-[3px]" style={{borderLeftColor: m.color}}>
             <div className="flex items-start gap-3">
               <div className="text-[32px] leading-none shrink-0">{m.emoji}</div>
               <div className="flex-1 min-w-0">
                 <div className="text-stone-400 text-[9px] tracking-[0.18em] uppercase font-bold mb-1">
-                  DAY {feedbackStats.softStreak} · 习惯科学
+                  {eyebrowLabel}
                 </div>
                 <div className="font-display font-bold text-stone-900 text-[15px] leading-snug">
                   {m.title}
