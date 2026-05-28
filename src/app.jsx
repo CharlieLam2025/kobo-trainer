@@ -3723,34 +3723,6 @@ ${text}`;
   return arr.filter(x => typeof x === 'string').map(s => s.trim()).filter(Boolean);
 }
 
-// DeepSeek 录完一稿多发：根据话题/时长，生成多平台标题 + 改写
-async function deepseekGeneratePublishKit({ apiKey, topic, mode, duration }) {
-  if (!topic?.trim()) throw new Error('话题为空');
-  const sys = '你是资深短视频内容策划。给一段口播视频，按平台生成不同风格的标题 + 配套文案，让创作者复制即发。';
-  const usr = `刚录了一条口播视频：
-- 话题：${topic}
-- 时长：约 ${duration || 60} 秒
-- 模式：${mode || '即兴'}
-
-请生成（仅返回 JSON 对象，不要其他文字 / 代码块）：
-{
-  "xhsTitles": ["小红书风格 1", "...3 条，emoji+数字+痛点钩子，≤20字"],
-  "dyTitles":  ["抖音风格 1",   "...3 条，更短更冲击，≤15字"],
-  "sphTitles": ["视频号风格 1", "...3 条，稳重价值感，≤22字"],
-  "xhsPost":   "小红书图文正文 200-300 字，分段，带 5 个#标签",
-  "moments":   "朋友圈短文 3-5 行，卖人设的版本"
-}`;
-  const data = await chatComplete({
-    apiKey,
-    messages: [{ role:'system', content:sys }, { role:'user', content:usr }],
-    temperature: 0.85,
-  });
-  const out = data.choices?.[0]?.message?.content || '';
-  const m = out.match(/\{[\s\S]*\}/);
-  if (!m) throw new Error('AI 输出非 JSON：' + out.slice(0,200));
-  return JSON.parse(m[0]);
-}
-
 // DeepSeek 每日激励语：根据用户当前状态生成一句话开场
 async function deepseekDailyGreeting({ apiKey, streak, totalCount, weekCount, dayOfWeek, isRestDay, todayCount, goalCount }) {
   const sys = '你是一个温暖、有创作经验的内容创作者朋友。给用户写一句开场打招呼，口语化、不要鸡汤、不要"加油"这种空话。';
@@ -5245,9 +5217,6 @@ const DoneView = ({ blob, contextLabel, duration = 0, onRetry, onNew, extra, tra
       {/* 🎯 AI 教练复盘 */}
       {blob && <CoachReview topic={contextLabel} durationSec={duration} initialTranscript={transcript} />}
 
-      {/* ✨ AI 发布助手 */}
-      {blob && contextLabel && <PublishKit topic={contextLabel} duration={duration} />}
-
       {/* 🚀 预演 → 发布链路 */}
       {blob && contextLabel && <PublishStep contextLabel={contextLabel} />}
 
@@ -5913,155 +5882,6 @@ const RecordingHistoryList = ({ settings: s }) => {
         })}
       </div>
     </div>
-  );
-};
-
-// ============ AI 发布助手：一稿多发 ============
-const PublishKit = ({ topic, duration }) => {
-  const settings = useSettings();
-  const [kit, setKit]         = useState(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError]     = useState('');
-  const [activeTab, setActiveTab] = useState('xhs'); // xhs | dy | sph | post | moments
-  const [copyToast, setCopyToast] = useState('');
-
-  const generate = async () => {
-    setLoading(true);
-    setError('');
-    try {
-      const k = await deepseekGeneratePublishKit({
-        apiKey: settings.apiKey,
-        topic: (topic || '').replace(/^话题：/, ''),
-        duration,
-      });
-      setKit(k);
-    } catch (e) {
-      setError(e.message);
-    } finally { setLoading(false); }
-  };
-
-  const copy = (text, label) => {
-    try {
-      navigator.clipboard.writeText(text).then(() => {
-        setCopyToast(`✓ 已复制：${label}`);
-        setTimeout(() => setCopyToast(''), 1800);
-      }).catch(() => setCopyToast('复制失败 · 长按文本手动复制'));
-    } catch {
-      setCopyToast('复制失败 · 长按文本手动复制');
-    }
-  };
-
-  if (!kit && !loading && !error) {
-    return (
-      <Card className="p-5 mb-4">
-        <div className="flex items-center gap-2.5 mb-3">
-          <div className="w-8 h-8 bg-[#FBEFF2] text-[#A30236] flex items-center justify-center" style={{borderRadius:'3px'}}>
-            <Icon name="sparkle" size={16} strokeWidth={1.7}/>
-          </div>
-          <div>
-            <h3 className="font-display font-bold text-stone-900 text-[16px] m-0">AI 发布助手</h3>
-            <div className="text-[9px] tracking-wider text-stone-400 mt-0.5">🤖 标题 / 文案由 AI 生成 · 仅供参考</div>
-          </div>
-          <Tag color="violet">DeepSeek</Tag>
-        </div>
-        <p className="text-[12px] text-stone-600 leading-relaxed mb-4">
-          一键根据这次预演的话题，生成 <span className="font-bold">3 个平台 × 3 条标题</span> + 小红书图文版 + 朋友圈短文。复制粘贴就能发。
-        </p>
-        <Btn variant="accent" onClick={generate} className="w-full">
-          <Icon name="sparkle" size={14}/> 一键生成多平台文案
-        </Btn>
-      </Card>
-    );
-  }
-
-  return (
-    <Card className="p-5 mb-4 relative">
-      <div className="flex items-center gap-2.5 mb-3">
-        <div className="w-8 h-8 bg-[#FBEFF2] text-[#A30236] flex items-center justify-center" style={{borderRadius:'3px'}}>
-          <Icon name="sparkle" size={16} strokeWidth={1.7}/>
-        </div>
-        <h3 className="font-display font-bold text-stone-900 text-[16px] m-0">AI 发布助手</h3>
-        {loading && <Tag color="amber">生成中...</Tag>}
-        {kit && <button onClick={generate} className="ml-auto text-xs text-stone-500 hover:text-[#A30236] flex items-center gap-1">
-          <Icon name="refresh" size={11}/> 重生成
-        </button>}
-      </div>
-
-      {loading && (
-        <div className="py-6 text-center text-stone-500 text-sm">
-          <div className="inline-flex items-center gap-2">
-            <span className="w-2 h-2 bg-[#A30236] rounded-full pulse-rec"/>
-            正在生成 3 个平台风格的标题 + 图文版 + 朋友圈版
-          </div>
-        </div>
-      )}
-      {error && (
-        <div className="bg-red-50 border border-red-200 px-3 py-2 text-xs text-red-700 mb-3" style={{borderRadius:'2px'}}>
-          {error}
-          <button onClick={generate} className="ml-2 underline">重试</button>
-        </div>
-      )}
-
-      {kit && (
-        <>
-          {/* Tab 切换 */}
-          <div className="flex gap-1 mb-3 overflow-x-auto no-scrollbar pb-1">
-            {[
-              { id:'xhs',     l:'📕 小红书' },
-              { id:'dy',      l:'🎵 抖音' },
-              { id:'sph',     l:'📺 视频号' },
-              { id:'post',    l:'📝 图文正文' },
-              { id:'moments', l:'💬 朋友圈' },
-            ].map(t => (
-              <button key={t.id} onClick={() => setActiveTab(t.id)}
-                className={`shrink-0 px-2.5 py-1.5 text-[11px] font-semibold transition-colors ${
-                  activeTab === t.id ? 'bg-[#A30236] text-white' : 'bg-stone-100 text-stone-700'
-                }`}
-                style={{borderRadius:'2px'}}>{t.l}</button>
-            ))}
-          </div>
-
-          {/* 内容区 */}
-          {(activeTab === 'xhs' || activeTab === 'dy' || activeTab === 'sph') && (
-            <div className="space-y-2">
-              {(kit[activeTab === 'xhs' ? 'xhsTitles' : activeTab === 'dy' ? 'dyTitles' : 'sphTitles'] || []).map((title, i) => (
-                <div key={i} className="flex items-start gap-2 bg-stone-50 px-3 py-2.5 border border-stone-200" style={{borderRadius:'2px'}}>
-                  <span className="text-stone-400 text-xs tabular-nums font-bold shrink-0 mt-0.5">{i+1}</span>
-                  <span className="flex-1 text-[13px] text-stone-800 leading-snug">{title}</span>
-                  <button onClick={() => copy(title, `标题 ${i+1}`)}
-                    className="shrink-0 text-[11px] text-[#A30236] hover:underline font-medium">复制</button>
-                </div>
-              ))}
-            </div>
-          )}
-
-          {activeTab === 'post' && (
-            <div>
-              <div className="bg-stone-50 px-3 py-3 border border-stone-200 text-[12px] text-stone-800 leading-relaxed whitespace-pre-wrap mb-2 max-h-72 overflow-y-auto" style={{borderRadius:'2px'}}>
-                {kit.xhsPost}
-              </div>
-              <Btn variant="secondary" size="sm" onClick={() => copy(kit.xhsPost, '小红书图文正文')} className="w-full">复制图文版</Btn>
-            </div>
-          )}
-
-          {activeTab === 'moments' && (
-            <div>
-              <div className="bg-stone-50 px-3 py-3 border border-stone-200 text-[12px] text-stone-800 leading-relaxed whitespace-pre-wrap mb-2" style={{borderRadius:'2px'}}>
-                {kit.moments}
-              </div>
-              <Btn variant="secondary" size="sm" onClick={() => copy(kit.moments, '朋友圈短文')} className="w-full">复制朋友圈版</Btn>
-            </div>
-          )}
-
-          {/* 复制 toast */}
-          {copyToast && (
-            <div className="absolute top-3 right-3 bg-stone-900 text-white text-xs px-3 py-1.5 fade-in" style={{borderRadius:'2px'}}>
-              {copyToast}
-            </div>
-          )}
-        </>
-      )}
-    </Card>
   );
 };
 
