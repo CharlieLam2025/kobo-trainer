@@ -5099,6 +5099,90 @@ const SameTopicCompare = ({ topic, currentTranscript, currentDuration }) => {
   );
 };
 
+// ============ 「明天的话题」预承诺 ============
+// 习惯科学的 pre-commitment device · 今天结束时给明天预订 · 明天打开就被「未完成的承诺」撞一下
+// 比单纯的提醒强 · 因为是「你自己选的承诺」不是「app 给你的任务」
+// localStorage helper（dateKeyToday / dateKeyTomorrow / readTomorrowTopic / writeTomorrowTopic /
+// clearTomorrowTopic）定义在 HomeView 上面 · 这里只渲染 UI
+const TomorrowTopicCommit = ({ defaultTopic = '' }) => {
+  const [text, setText] = useState('');
+  const [committed, setCommitted] = useState(() => {
+    // mount 时检查：是否已经为明天预订过了
+    const t = readTomorrowTopic();
+    return t && t.forDate === dateKeyTomorrow() ? t.topic : null;
+  });
+
+  const submit = () => {
+    const t = text.trim();
+    if (!t) return;
+    writeTomorrowTopic(t);
+    setCommitted(t);
+    setText('');
+  };
+  const cancel = () => {
+    clearTomorrowTopic();
+    setCommitted(null);
+  };
+  const useToday = () => setText(defaultTopic || '');
+
+  return (
+    <Card className="p-5 mb-4">
+      <div className="flex items-center gap-2.5 mb-3">
+        <div className="w-8 h-8 bg-[#FBEFF2] text-[#A30236] flex items-center justify-center" style={{borderRadius:'3px'}}>
+          <Icon name="clock" size={16} strokeWidth={1.7}/>
+        </div>
+        <div>
+          <div className="text-stone-400 text-[9px] tracking-[0.18em] uppercase font-semibold">TOMORROW</div>
+          <div className="font-display font-bold text-[#A30236] text-[14px] leading-none mt-0.5">
+            给明天的自己预订一题
+          </div>
+        </div>
+      </div>
+
+      {committed ? (
+        <div className="bg-emerald-50 border border-emerald-200 p-4" style={{borderRadius:'3px'}}>
+          <div className="flex items-start gap-2 mb-2">
+            <Icon name="check" size={14} className="text-emerald-700 mt-0.5 shrink-0" strokeWidth={2.2}/>
+            <div className="text-[10px] tracking-[0.16em] uppercase font-bold text-emerald-700">已预订给明天</div>
+          </div>
+          <div className="font-display font-bold text-stone-900 text-[15px] leading-snug pl-5">{committed}</div>
+          <div className="flex items-center justify-end mt-3">
+            <button onClick={cancel} className="text-[11px] text-stone-500 hover:text-[#A30236] transition-colors">
+              取消预订
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div>
+          <p className="text-[12px] text-stone-600 leading-relaxed mb-3">
+            写下你明天想讲的一句话 / 一个观点 / 一个问题 ·
+            明天打开 app · 它会作为你给自己的承诺出现在首页。
+          </p>
+          <textarea
+            value={text}
+            onChange={e => setText(e.target.value)}
+            placeholder="例如：聊聊「为什么我离开大厂」"
+            className="w-full p-3 border border-stone-300 text-sm leading-relaxed resize-none focus:outline-none focus:border-[#A30236]"
+            style={{borderRadius:'3px', minHeight: 64}}
+            maxLength={200}
+          />
+          <div className="flex items-center justify-between flex-wrap gap-2 mt-3">
+            {defaultTopic && (
+              <button onClick={useToday} className="text-[11px] text-stone-600 hover:text-[#A30236] transition-colors">
+                ↻ 用今天这题
+              </button>
+            )}
+            <div className="flex-1" />
+            <Btn variant="primary" onClick={submit} disabled={!text.trim()}>
+              预订给明天 →
+            </Btn>
+          </div>
+        </div>
+      )}
+    </Card>
+  );
+};
+
 // ============ Done View ============
 const DoneView = ({ blob, contextLabel, duration = 0, onRetry, onNew, extra, transcript = '' }) => {
   const url = useMemo(() => blob ? URL.createObjectURL(blob) : null, [blob]);
@@ -5341,6 +5425,9 @@ const DoneView = ({ blob, contextLabel, duration = 0, onRetry, onNew, extra, tra
 
       {/* 🚀 预演 → 发布链路 */}
       {blob && contextLabel && <PublishStep contextLabel={contextLabel} />}
+
+      {/* ✉️ 给明天的自己预订一题（pre-commitment device） */}
+      {blob && <TomorrowTopicCommit defaultTopic={contextLabel} />}
 
       {extra}
     </div>
@@ -6367,7 +6454,42 @@ const WeeklyRecapModal = ({ onClose, files }) => {
   );
 };
 
-const HomeView = ({ onSelect, onOpenSettings, onQuickStart }) => {
+// 「明天的话题」localStorage helper · 形态 { topic: string, forDate: 'YYYY-MM-DD' }
+const dateKeyToday = () => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+};
+const dateKeyTomorrow = () => {
+  const d = new Date(); d.setDate(d.getDate() + 1);
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+};
+const readTomorrowTopic = () => {
+  try {
+    const raw = localStorage.getItem('kobo.tomorrowTopic');
+    if (!raw) return null;
+    const obj = JSON.parse(raw);
+    if (!obj || typeof obj.topic !== 'string') return null;
+    // 自动过期：forDate < today → 当作没设过
+    if (obj.forDate < dateKeyToday()) {
+      try { localStorage.removeItem('kobo.tomorrowTopic'); } catch {}
+      return null;
+    }
+    return obj;
+  } catch { return null; }
+};
+const writeTomorrowTopic = (topic) => {
+  try {
+    localStorage.setItem('kobo.tomorrowTopic', JSON.stringify({
+      topic: String(topic).trim().slice(0, 200),
+      forDate: dateKeyTomorrow(),
+    }));
+  } catch {}
+};
+const clearTomorrowTopic = () => {
+  try { localStorage.removeItem('kobo.tomorrowTopic'); } catch {}
+};
+
+const HomeView = ({ onSelect, onOpenSettings, onQuickStart, onStartWithTopic }) => {
   const cards = [
     { id: 'improv',       no: '01', icon: 'dice',     cn: '即兴练习',     tag: '抛话题 · 倒计时', desc: '随机抽题 · 倒计时压力下逼出无稿即兴的能力。',           stat: '3', stat_caption: '推荐每日量' },
     { id: 'teleprompter', no: '02', icon: 'document', cn: '爆款文案复刻', tag: '粘贴 · 提词器',   desc: '粘贴爆款文案 / freestyle 关键词，练节奏、语气、镜头感。',  stat: '∞', stat_caption: '任意字数' },
@@ -6381,6 +6503,8 @@ const HomeView = ({ onSelect, onOpenSettings, onQuickStart }) => {
   const dayOfWeek = ['日','一','二','三','四','五','六'][today.getDay()];
   const [editingGoal, setEditingGoal] = useState(false);
   const [showWeeklyRecap, setShowWeeklyRecap] = useState(false);
+  // 「明天的话题」承诺 · 用户昨天预订给今天的题目
+  const [tomorrowTopic, setTomorrowTopic] = useState(() => readTomorrowTopic());
   const [dailyGreeting, setDailyGreeting] = useState('');
   // 月度战报海报
   const [reportBlob, setReportBlob] = useState(null);
@@ -6543,8 +6667,44 @@ const HomeView = ({ onSelect, onOpenSettings, onQuickStart }) => {
     };
   }, [settings.savedFiles, settings.dailyGoal, settings.restDays]);
 
+  // 是否有今天的「预订题目」（forDate 必须等于今天 · 否则当过期处理）
+  const pendingTopic = tomorrowTopic && tomorrowTopic.forDate === dateKeyToday()
+    ? tomorrowTopic.topic
+    : null;
+  const startPresetAndClear = () => {
+    if (!pendingTopic) return;
+    const t = pendingTopic;
+    clearTomorrowTopic();
+    setTomorrowTopic(null);
+    if (onStartWithTopic) onStartWithTopic(t);
+    else onSelect && onSelect('improv'); // 兜底
+  };
+
   return (
     <div className="fade-in">
+      {/* ╭─────────────────────────────╮  */}
+      {/* │   你昨天给今天预订的题      │  */}
+      {/* ╰─────────────────────────────╯  */}
+      {pendingTopic && (
+        <button onClick={startPresetAndClear}
+          className="block w-full mb-4 text-left p-4 bg-[#061A6C] text-white hover:bg-[#001A71] active:bg-[#04135a] transition-colors fade-in"
+          style={{borderRadius:'4px'}}>
+          <div className="flex items-center gap-2 mb-2">
+            <span className="text-[18px] leading-none">✉️</span>
+            <span className="text-[10px] tracking-[0.2em] font-bold uppercase text-[#F1A23F]">
+              你昨天给今天预订的题
+            </span>
+          </div>
+          <div className="font-display font-bold text-[15px] leading-snug mb-3 pr-2">
+            {pendingTopic}
+          </div>
+          <div className="inline-flex items-center gap-2 bg-white text-[#061A6C] px-3 py-1.5 text-[12px] font-bold"
+               style={{borderRadius:'3px'}}>
+            <Icon name="play" size={12} strokeWidth={1.8} /> 立即兑现 · 60s
+          </div>
+        </button>
+      )}
+
       {/* ╭─────────────────────────────╮  */}
       {/* │   GREETING + TODAY DATE     │  */}
       {/* ╰─────────────────────────────╯  */}
@@ -7016,6 +7176,8 @@ const ImprovMode = ({ intent, clearIntent }) => {
   const [source, setSource] = useState(ALL_SOURCE);   // 默认从全部 1300+ 题里抽
   // 从首页 HERO 一键进来 → 进入「速记模式」：渲染极简 QuickStartView 而不是 3 屏 config
   const [quickMode, setQuickMode] = useState(false);
+  // 当从 intent 强行指定 topic 时（比如「明天的话题」），抑制 source useEffect 抢占一次
+  const skipNextSourceDrawRef = useRef(false);
   const [topic, setTopic] = useState('');
   const [preCount, setPreCount] = useState(3);
   const [timeLeft, setTimeLeft] = useState(0);
@@ -7053,6 +7215,11 @@ const ImprovMode = ({ intent, clearIntent }) => {
   }, [source, topic, allSources, aiPool]);
 
   useEffect(() => {
+    // intent 指定 topic 时跳过本轮自动抽题（避免覆盖 preset topic）
+    if (skipNextSourceDrawRef.current) {
+      skipNextSourceDrawRef.current = false;
+      return;
+    }
     if (source === AI_SOURCE) {
       if (aiPool.length) setTopic(pickRandom(aiPool));
       return;
@@ -7065,7 +7232,9 @@ const ImprovMode = ({ intent, clearIntent }) => {
   /* eslint-disable-next-line */
   }, [source]);
 
-  // 接住「速记」意图：30 秒 + 全题库随机 + 不显示完整 config UI
+  // 接住 intent 意图：
+  // - 'quick30'                      → 30s + 全题库随机
+  // - { type:'preset', topic:'xxx' } → 60s + 指定题目（明天的话题用）
   // 不在 useEffect 里调 cam.start() · 那会丢失 iOS 的 user-gesture 链
   // 用户在 QuickStartView 里点「立即开练」时 begin() 才被触发 · gesture 链完整
   useEffect(() => {
@@ -7073,6 +7242,15 @@ const ImprovMode = ({ intent, clearIntent }) => {
       setDuration(30);
       setUseCustom(false);
       setSource(ALL_SOURCE);
+      setQuickMode(true);
+      clearIntent && clearIntent();
+    } else if (intent && intent.type === 'preset' && intent.topic) {
+      setDuration(60);
+      setUseCustom(false);
+      // 关键：先开抑制 flag · 再 setSource · 这样 source useEffect 不会覆盖我们的 topic
+      skipNextSourceDrawRef.current = true;
+      setSource(ALL_SOURCE);
+      setTopic(intent.topic);
       setQuickMode(true);
       clearIntent && clearIntent();
     }
@@ -7134,21 +7312,29 @@ const ImprovMode = ({ intent, clearIntent }) => {
   };
 
   // 「速记」模式 · 跳过 3 屏 config 直接给一张「题目 + 立即开练」卡
+  // 两种入口共用这张卡：
+  //   30 秒速记 · 首页 HERO 进来 · 全题库随机 · 可换一题
+  //   60 秒预订 · 「明天的话题」进来 · 题目已经写好 · 不显示换一题
   if (stage === 'config' && quickMode) {
+    const isPresetTake = effectiveDuration === 60;  // 60s 路径仅由 preset intent 触发
     return (
       <div className="fade-in py-4">
-        <div className="eyebrow eyebrow--crimson mb-2" style={{fontSize:'10px'}}>30 秒速记 · 从首页一键进入</div>
+        <div className="eyebrow eyebrow--crimson mb-2" style={{fontSize:'10px'}}>
+          {isPresetTake ? '今天的预订 · 你昨天给自己选的' : '30 秒速记 · 从首页一键进入'}
+        </div>
         <h1 className="font-display font-bold text-stone-900 m-0 mb-1 leading-[1.1] tracking-tight" style={{fontSize:'22px'}}>
-          {topic ? '抽到这一题' : '抽题中...'}
+          {topic ? (isPresetTake ? '今天要讲这个' : '抽到这一题') : '抽题中...'}
         </h1>
-        <p className="text-[11px] text-stone-500 mb-5 leading-tight">从 1300+ 题随机 · 不喜欢可换</p>
+        <p className="text-[11px] text-stone-500 mb-5 leading-tight">
+          {isPresetTake ? '一题一录 · 60 秒 · 这是你给自己的承诺' : '从 1300+ 题随机 · 不喜欢可换'}
+        </p>
 
         <div className="border-l-[3px] border-[#A30236] bg-white border-y border-r border-stone-200 p-5 mb-5 relative">
           <div className="absolute top-3 right-3 w-7 h-7 bg-[#FBEFF2] text-[#A30236] flex items-center justify-center" style={{borderRadius:'3px'}}>
             <Icon name="target" size={14} strokeWidth={1.7}/>
           </div>
           <div className="text-[10px] text-[#A30236] mb-2 font-medium tracking-[0.12em] uppercase">
-            全部混合 · {totalAllTopics}+ 题
+            {isPresetTake ? '昨天预订的题目' : `全部混合 · ${totalAllTopics}+ 题`}
           </div>
           <div className="font-display font-bold text-stone-900 leading-snug text-[20px] mt-1 pr-8">
             {topic || '...'}
@@ -7156,15 +7342,20 @@ const ImprovMode = ({ intent, clearIntent }) => {
         </div>
 
         <Btn variant="primary" size="lg" onClick={begin} disabled={!topic} className="w-full mb-3">
-          <Icon name="rec" size={16} strokeWidth={1.8}/> 立即开练 · 30 秒
+          <Icon name="rec" size={16} strokeWidth={1.8}/> 立即开练 · {effectiveDuration} 秒
         </Btn>
 
         {cam.error && <div className="text-red-600 text-xs mb-3 text-center">{cam.error}</div>}
 
         <div className="flex items-center justify-between text-[12px] mt-4 pt-4 border-t border-stone-200">
-          <button onClick={drawTopic} className="text-stone-600 hover:text-[#A30236] flex items-center gap-1.5 transition-colors">
-            <Icon name="refresh" size={12} strokeWidth={1.8}/> 换一题
-          </button>
+          {/* 预订题目隐藏「换一题」· 不能换 · 这是承诺 */}
+          {isPresetTake ? (
+            <span className="text-stone-400 italic">题目你已经承诺过了 · 不换</span>
+          ) : (
+            <button onClick={drawTopic} className="text-stone-600 hover:text-[#A30236] flex items-center gap-1.5 transition-colors">
+              <Icon name="refresh" size={12} strokeWidth={1.8}/> 换一题
+            </button>
+          )}
           <button onClick={() => setQuickMode(false)} className="text-stone-400 hover:text-stone-700 transition-colors">
             完整配置 →
           </button>
@@ -10037,9 +10228,17 @@ const VoiceUpgradePrompt = () => {
 function App() {
   const [mode, setMode] = useState('home');
   // 从首页 HERO 按钮进 ImprovMode 时传一个「快速速记」意图 · 让 ImprovMode 跳过 3 屏 config
+  // improvIntent 形态：
+  //   - 'quick30'                          → 30s + 全题库随机
+  //   - { type: 'preset', topic: 'xxx' }   → 60s + 指定题目（明天的话题用）
   const [improvIntent, setImprovIntent] = useState(null);
   const quickStartImprov = useCallback(() => {
     setImprovIntent('quick30');
+    setMode('improv');
+  }, []);
+  const startWithTopic = useCallback((topic) => {
+    if (!topic) return;
+    setImprovIntent({ type: 'preset', topic });
     setMode('improv');
   }, []);
   const clearImprovIntent = useCallback(() => setImprovIntent(null), []);
@@ -10277,7 +10476,7 @@ function App() {
       <main style={{flex:1, overflowY:'auto', overflowX:'hidden', minHeight:0}}>
         <div className="px-5 py-5">
           {mode === 'home' ? (
-            <HomeView onSelect={setMode} onOpenSettings={() => setSettingsOpen(true)} onQuickStart={quickStartImprov} />
+            <HomeView onSelect={setMode} onOpenSettings={() => setSettingsOpen(true)} onQuickStart={quickStartImprov} onStartWithTopic={startWithTopic} />
           ) : (
             <>
               {(() => {
