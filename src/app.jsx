@@ -6925,13 +6925,12 @@ const NAV_ITEMS = [
   { id: 'endless',      icon: 'refresh',  no: '02',  cn: '无限', sub: '自动换题 · 不停练' },
   { id: 'teleprompter', icon: 'document', no: '03',  cn: '文案', sub: '粘贴 → 提词器' },
   { id: 'host',         icon: 'mic',      no: '04',  cn: '主持', sub: '一步步追问' },
-  { id: 'live',         icon: 'live',     no: '05',  cn: '直播', sub: '虚拟直播间' },
-  { id: 'tutorial',     icon: 'book',     no: '06',  cn: '教程', sub: '学框架 → 实操' },
+  { id: 'tutorial',     icon: 'book',     no: '05',  cn: '教程', sub: '学框架 → 实操' },
 ];
 
 const BottomTabs = ({ mode, onChange }) => (
   <nav className="shrink-0 bg-white border-t border-stone-200 relative">
-    <div className="grid grid-cols-7">
+    <div className="grid grid-cols-6">
       {NAV_ITEMS.map(it => {
         const active = mode === it.id;
         return (
@@ -7157,8 +7156,7 @@ const HomeView = ({ onSelect, onOpenSettings }) => {
     { id: 'improv',       no: '01', icon: 'dice',     cn: '即兴练习',     tag: '抛话题 · 倒计时', desc: '随机抽题 · 倒计时压力下逼出无稿即兴的能力。',           stat: '3', stat_caption: '推荐每日量' },
     { id: 'teleprompter', no: '02', icon: 'document', cn: '爆款文案复刻', tag: '粘贴 · 提词器',   desc: '粘贴爆款文案 / freestyle 关键词，练节奏、语气、镜头感。',  stat: '∞', stat_caption: '任意字数' },
     { id: 'host',         no: '03', icon: 'mic',      cn: '主持人引导',   tag: '追问 · 转写',     desc: '主持人开场抛题 → 追问深挖 → 收尾总结。逼出真观点。',     stat: '5+', stat_caption: '轮次追问' },
-    { id: 'live',         no: '04', icon: 'live',     cn: '虚拟直播间',   tag: '抖音 / 小红书风', desc: '模拟真实直播弹幕 + 在看人数 + 互动，练面对镜头的镇定感。', stat: '∞', stat_caption: '随时开播' },
-    { id: 'tutorial',     no: '05', icon: 'book',     cn: '教程模式',     tag: '学框架 · 实操',   desc: '钩子结构 · PREP · 黄金圈 · 故事三幕 · FCF，学完即录。',     stat: '5', stat_caption: '套表达框架' },
+    { id: 'tutorial',     no: '04', icon: 'book',     cn: '教程模式',     tag: '学框架 · 实操',   desc: '钩子结构 · PREP · 黄金圈 · 故事三幕 · FCF，学完即录。',     stat: '5', stat_caption: '套表达框架' },
   ];
 
   const today = new Date();
@@ -10399,294 +10397,6 @@ const EndlessMode = () => {
   );
 };
 
-// ============ Mode 6: 虚拟直播间 ============
-// 模拟抖音 / 小红书直播：弹幕 + 在看人数 + 进场通知 + 礼物 + 点赞动画
-const LIVE_CHAT_POOL = [
-  '666', '666666', '来了来了', '主播好帅', '主播好漂亮', '这观点炸了', '哈哈哈哈', '说得对',
-  '一针见血', '说到心里了', '我也是这么想的', '感谢主播分享', '太赞了', '收藏了', '已分享',
-  '主播继续讲', '想听更多', '主播有课吗', '在哪学的', '主播声音真好听', '思路清晰', '内容好深',
-  '比别的主播强多了', '今天来对了', '听明白了', '醍醐灌顶', '受教了', '准时来报到', '我每场都来',
-  '主播加油', '冲冲冲', '关注了关注了', '老粉打卡', '主播多大了', '主播是哪里人', '能加微信吗',
-  '怎么加群', '哪里能找到主播', '主播下次几点', '点了关注没掉', '666 主播说得好', '同感同感',
-  '主播下播了吗', '正在飞机上看', '主播这语速绝了', '别下播啊', '听完才去吃饭', '受用',
-  '主播是做什么的', '我也想做自媒体', '主播带带我', '不愧是大神', '稳了', '到位',
-];
-const LIVE_USERS = ['梅梅', '小李', 'Anna', '阿凯', '小乔', '果儿', '小白', '麦麦', '阿强', '小红', '老王', '小张',
-  '橙子', '糖糖', '可乐', '小米', '阿杰', '茉茉', '可可', 'Lily', 'Kevin', 'Tina', '阿浩', '小光'];
-const LIVE_GIFTS = ['小心心', '玫瑰', '棒棒糖', '加油', '点亮', '小星星', '辣条', '小鼓掌'];
-const randomUser = () => LIVE_USERS[Math.floor(Math.random() * LIVE_USERS.length)] + (Math.floor(Math.random() * 90) + 10);
-const randomChat = () => ({
-  id: Math.random().toString(36).slice(2),
-  user: randomUser(),
-  text: LIVE_CHAT_POOL[Math.floor(Math.random() * LIVE_CHAT_POOL.length)],
-  kind: 'chat',
-});
-const randomEnter = () => ({
-  id: Math.random().toString(36).slice(2),
-  user: randomUser(),
-  kind: 'enter',
-});
-const randomGift = () => ({
-  id: Math.random().toString(36).slice(2),
-  user: randomUser(),
-  gift: LIVE_GIFTS[Math.floor(Math.random() * LIVE_GIFTS.length)],
-  count: [1, 1, 1, 2, 5, 10][Math.floor(Math.random() * 6)],
-  kind: 'gift',
-});
-
-const LiveMode = () => {
-  const [stage, setStage] = useState('config'); // config | live | done
-  const [chat, setChat] = useState([]); // 最近 8 条
-  const [viewers, setViewers] = useState(0);
-  const [hearts, setHearts] = useState(0);
-  const [floatingHearts, setFloatingHearts] = useState([]); // {id,x,emoji}
-  const [topGift, setTopGift] = useState(null); // big gift toast
-  const [followed, setFollowed] = useState(false);
-  const [sessionDur, setSessionDur] = useState(0);
-  const cam = useCamera();
-  const rec = useRecorder();
-
-  const addChat = (msg) => setChat(prev => [...prev.slice(-15), msg]);
-
-  const spawnHeart = (x = null) => {
-    const id = Math.random().toString(36).slice(2);
-    const emoji = ['❤️', '💖', '💗', '🧡', '💛'][Math.floor(Math.random() * 5)];
-    const xVal = x !== null ? x : 30 + Math.random() * 40;
-    setFloatingHearts(prev => [...prev, { id, x: xVal, emoji }].slice(-20));
-    setHearts(h => h + 1);
-    setTimeout(() => setFloatingHearts(prev => prev.filter(h => h.id !== id)), 2500);
-  };
-
-  const begin = async () => {
-    const s = await cam.start();
-    if (!s) return;
-    setStage('live');
-    setSessionDur(0);
-    setChat([]);
-    setHearts(0);
-    setViewers(Math.floor(Math.random() * 800) + 200);
-    rec.start(s);
-    // 启动几条欢迎弹幕
-    setTimeout(() => addChat(randomEnter()), 500);
-    setTimeout(() => addChat({ id: Math.random().toString(36).slice(2), user: '系统', text: '欢迎来到直播间', kind: 'system' }), 1200);
-  };
-
-  // 弹幕 + 进场 + 礼物 + 在看 + 计时
-  useEffect(() => {
-    if (stage !== 'live') return;
-    const intervals = [];
-
-    // 弹幕 每 2-4s
-    intervals.push(setInterval(() => {
-      addChat(randomChat());
-    }, 2500 + Math.random() * 2000));
-
-    // 新人进场 每 8-15s
-    intervals.push(setInterval(() => {
-      addChat(randomEnter());
-      // 顺便涨观众
-      setViewers(v => v + Math.floor(Math.random() * 5) + 1);
-    }, 9000 + Math.random() * 6000));
-
-    // 礼物 每 25-50s（罕见，大动作）
-    intervals.push(setInterval(() => {
-      const g = randomGift();
-      addChat(g);
-      setTopGift(g);
-      setTimeout(() => setTopGift(null), 2800);
-    }, 27000 + Math.random() * 20000));
-
-    // 1s tick：计时 + 在看人数微变化
-    intervals.push(setInterval(() => {
-      setSessionDur(d => d + 1);
-      setViewers(v => {
-        const delta = Math.floor(Math.random() * 7) - 2; // -2~+4 微随机
-        return Math.max(50, v + delta);
-      });
-    }, 1000));
-
-    return () => intervals.forEach(clearInterval);
-    // eslint-disable-next-line
-  }, [stage]);
-
-  const finish = () => {
-    rec.stop();
-    cam.stop();
-    setStage('done');
-  };
-
-  const reset = () => {
-    setStage('config');
-    cam.stop();
-  };
-
-  if (stage === 'live') {
-    return (
-      <div className="absolute inset-0 z-[70] bg-stone-950 fade-in" style={{borderRadius:0}}
-        onClick={(e) => {
-          const rect = e.currentTarget.getBoundingClientRect();
-          const x = ((e.clientX - rect.left) / rect.width) * 100;
-          spawnHeart(x);
-        }}>
-        <CameraFrame videoRef={cam.videoRef} voiceOnly={cam.voiceOnly} streamRef={cam.streamRef} className="w-full h-full"
-          overlay={
-            <>
-              {/* 顶部：主播信息 + 关闭 */}
-              <div className="absolute left-3 right-3 flex items-start justify-between gap-2 pointer-events-auto" style={{top:'calc(env(safe-area-inset-top, 0px) + 12px)'}}>
-                <div className="flex items-center gap-2 bg-stone-950/70 backdrop-blur px-2 py-1.5" style={{borderRadius:'24px'}}>
-                  <div className="w-8 h-8 bg-[#A30236] text-white flex items-center justify-center font-display font-bold text-sm shrink-0" style={{borderRadius:'50%'}}>口</div>
-                  <div className="flex-1 min-w-0 leading-tight">
-                    <div className="text-white text-[12px] font-bold truncate">CharlieLam</div>
-                    <div className="text-white/60 text-[9px]">1.2w 粉丝 · 已开播 {formatTime(sessionDur)}</div>
-                  </div>
-                  {!followed ? (
-                    <button onClick={(e) => { e.stopPropagation(); setFollowed(true); }}
-                      className="bg-[#A30236] text-white px-2.5 py-1 text-[10px] font-bold tracking-wider"
-                      style={{borderRadius:'12px'}}>+ 关注</button>
-                  ) : (
-                    <span className="text-emerald-300 text-[10px] px-2 font-bold">✓ 已关注</span>
-                  )}
-                </div>
-                <button onClick={(e) => { e.stopPropagation(); finish(); }}
-                  className="bg-stone-950/70 backdrop-blur text-white w-8 h-8 flex items-center justify-center" style={{borderRadius:'50%'}}>
-                  <Icon name="close" size={16}/>
-                </button>
-              </div>
-
-              {/* 顶部右下：在看人数 + REC */}
-              <div className="absolute right-3 flex flex-col items-end gap-1.5 pointer-events-none" style={{top:'calc(env(safe-area-inset-top, 0px) + 58px)'}}>
-                <div className="bg-[#A30236] text-white px-2 py-0.5 text-[10px] tracking-wider font-bold flex items-center gap-1.5" style={{borderRadius:'2px'}}>
-                  <span className="w-1.5 h-1.5 rounded-full bg-white pulse-rec" />LIVE
-                </div>
-                <div className="bg-stone-950/70 backdrop-blur text-white px-2 py-1 text-[11px] font-bold tabular-nums" style={{borderRadius:'10px'}}>
-                  👁 {viewers >= 10000 ? (viewers/10000).toFixed(1) + 'w' : viewers} 在看
-                </div>
-              </div>
-
-              {/* 大礼物 toast */}
-              {topGift && (
-                <div className="absolute left-1/2 -translate-x-1/2 bg-gradient-to-r from-amber-500 to-rose-500 text-white px-4 py-3 fade-in pointer-events-none" style={{top:'30%', borderRadius:'8px'}}>
-                  <div className="text-[10px] tracking-wider opacity-80">{topGift.user}</div>
-                  <div className="font-bold text-lg">送出了 {topGift.gift} × {topGift.count}</div>
-                </div>
-              )}
-
-              {/* 飘心动画 */}
-              <div className="absolute inset-0 pointer-events-none overflow-hidden">
-                {floatingHearts.map(h => (
-                  <span key={h.id}
-                    className="absolute bottom-24 text-2xl"
-                    style={{
-                      left: `${h.x}%`,
-                      animation: 'heartFloat 2.5s ease-out forwards',
-                      filter: 'drop-shadow(0 2px 4px rgba(0,0,0,0.3))',
-                    }}>{h.emoji}</span>
-                ))}
-              </div>
-
-              {/* 底部弹幕 + 输入栏 */}
-              <div className="absolute left-0 right-0 px-3 pointer-events-none" style={{bottom:'calc(env(safe-area-inset-bottom, 0px) + 16px)'}}>
-                {/* chat list */}
-                <div className="max-h-44 overflow-hidden flex flex-col justify-end mb-2 space-y-1">
-                  {chat.slice(-6).map(m => {
-                    if (m.kind === 'enter') {
-                      return <div key={m.id} className="text-amber-200 text-[12px] font-medium fade-in" style={{textShadow:'0 1px 2px rgba(0,0,0,0.6)'}}>
-                        <span className="text-amber-300/80">●</span> {m.user} 来了
-                      </div>;
-                    }
-                    if (m.kind === 'gift') {
-                      return <div key={m.id} className="text-rose-200 text-[12px] font-bold fade-in" style={{textShadow:'0 1px 2px rgba(0,0,0,0.6)'}}>
-                        🎁 {m.user} 送出 {m.gift} ×{m.count}
-                      </div>;
-                    }
-                    if (m.kind === 'system') {
-                      return <div key={m.id} className="text-stone-300 text-[11px] italic fade-in">{m.text}</div>;
-                    }
-                    return <div key={m.id} className="text-white text-[12px] fade-in flex items-baseline gap-1.5" style={{textShadow:'0 1px 2px rgba(0,0,0,0.6)'}}>
-                      <span className="text-amber-300 font-bold shrink-0">{m.user}:</span>
-                      <span>{m.text}</span>
-                    </div>;
-                  })}
-                </div>
-                {/* 输入栏 + 行动 */}
-                <div className="flex items-center gap-2 pointer-events-auto">
-                  <div className="flex-1 bg-stone-950/60 backdrop-blur text-white/60 text-[12px] px-3 py-2 italic" style={{borderRadius:'18px'}}>
-                    说点什么... <span className="text-[10px] opacity-60">（仅装饰）</span>
-                  </div>
-                  <button onClick={(e) => { e.stopPropagation(); spawnHeart(); }}
-                    className="bg-stone-950/60 backdrop-blur w-9 h-9 flex items-center justify-center text-rose-300" style={{borderRadius:'50%'}}>
-                    <Icon name="heart" size={18} strokeWidth={1.8}/>
-                  </button>
-                  <BeautyButton cam={cam} className="!w-9 !h-9 !px-0 !py-0 !justify-center" /><AudienceViewButton cam={cam} className="!w-9 !h-9 !px-0 !py-0 !justify-center" />
-                </div>
-                <div className="text-center text-white/50 text-[10px] mt-1.5 pointer-events-none">
-                  点屏幕任意位置 = 送 ❤️ · 总点赞 {hearts}
-                </div>
-              </div>
-            </>
-          }
-        />
-      </div>
-    );
-  }
-
-  if (stage === 'done') {
-    return <DoneView
-      blob={rec.blob}
-      contextLabel={`直播间 · ${formatTime(sessionDur)} · ${viewers} 在看 · ${hearts} 点赞`}
-      duration={sessionDur}
-      onRetry={begin}
-      onNew={reset}
-    />;
-  }
-
-  // config stage
-  return (
-    <div className="space-y-4 fade-in">
-      <Card className="p-5">
-        <div className="flex items-center gap-2.5 mb-3">
-          <div className="w-8 h-8 bg-[#FBEFF2] text-[#A30236] flex items-center justify-center" style={{borderRadius:"3px"}}>
-            <Icon name="live" size={16} strokeWidth={1.7} />
-          </div>
-          <h3 className="font-display font-bold text-stone-900 text-[16px] m-0">虚拟直播间</h3>
-          <Tag color="orange">模拟抖音 / 小红书</Tag>
-        </div>
-        <p className="text-[13px] text-stone-700 leading-relaxed mb-3">
-          一个完全模拟的直播环境 —— 弹幕、礼物、新人进场、在看人数全是假的，但**真实程度像极了第一次开播**。
-          专门拿来练"面对镜头被看着说话"的镇定感。
-        </p>
-        <ul className="text-xs text-stone-600 space-y-1.5 leading-relaxed pl-4 list-disc">
-          <li>每 2-4 秒一条弹幕 · 5 类常见弹幕语</li>
-          <li>每 8-15 秒新观众进场提示</li>
-          <li>每 25-50 秒收一份礼物（玫瑰 / 棒棒糖 / 加油 ...）</li>
-          <li>在看人数随机起伏 · 越久越多人来</li>
-          <li>点屏幕任意位置 = 送 ❤️ 飘心动画</li>
-          <li>全程录像 · 结束后可回看自己的状态</li>
-        </ul>
-      </Card>
-      <Card className="p-5">
-        <div className="flex items-center gap-2.5 mb-3">
-          <div className="w-8 h-8 bg-[#FBEFF2] text-[#A30236] flex items-center justify-center" style={{borderRadius:"3px"}}>
-            <Icon name="sparkle" size={16} strokeWidth={1.7} />
-          </div>
-          <h3 className="font-display font-bold text-stone-900 text-[16px] m-0">使用建议</h3>
-        </div>
-        <div className="text-[13px] text-stone-700 leading-relaxed space-y-2">
-          <p><span className="font-bold text-[#A30236]">第一次直播前</span>：开 5 分钟，光看弹幕滚就行，让镜头感"脱敏"。</p>
-          <p><span className="font-bold text-[#A30236]">练开场</span>：开播 30 秒内必须做 4 件事 —— 自我介绍 + 价值承诺 + 引导关注 + 抛话题。在虚拟直播间反复练这 30 秒。</p>
-          <p><span className="font-bold text-[#A30236]">练面对冷场</span>：弹幕真实直播间会冷的，这里假弹幕不会停，但你可以训练"哪怕没人理我也要稳"。</p>
-        </div>
-      </Card>
-      <div className="flex justify-end gap-3">
-        {cam.error && <span className="text-sm text-red-600 self-center">{cam.error}</span>}
-        <Btn variant="primary" size="lg" onClick={begin}>
-          <Icon name="live" size={14}/> 开播
-        </Btn>
-      </div>
-    </div>
-  );
-};
-
 // ============ Settings Panel ============
 const SettingsPanel = ({ onClose }) => {
   const s = useSettings();
@@ -10923,7 +10633,6 @@ const ONBOARDING_SLIDES = [
       '🎲 即兴 · 1384 题 · 倒计时硬逼',
       '📜 提词器 · 粘爆款 / 关键词 freestyle',
       '🎤 主持人 · AI 追问深挖你的观点',
-      '📺 虚拟直播间 · 假弹幕 / 假在线',
       '📘 教程 · 钩子结构 / PREP / 黄金圈',
     ],
   },
@@ -11260,7 +10969,7 @@ function App() {
                 if (!it) return null;
                 const titles = {
                   improv: '即兴练习', endless: '无限模式', teleprompter: '爆款文案复刻',
-                  host: '主持人引导', live: '虚拟直播间', tutorial: '教程模式',
+                  host: '主持人引导', tutorial: '教程模式',
                 };
                 return <PageHeader no={it.no} iconName={it.icon} title={titles[mode] || it.cn} desc={it.sub} />;
               })()}
@@ -11268,7 +10977,6 @@ function App() {
               {mode === 'endless'      && <EndlessMode key="endless" />}
               {mode === 'teleprompter' && <TeleprompterMode key="tele" />}
               {mode === 'host'         && <HostMode key="host" />}
-              {mode === 'live'         && <LiveMode key="live" />}
               {mode === 'tutorial'     && <TutorialMode key="tut" />}
             </>
           )}
