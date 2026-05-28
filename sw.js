@@ -1,7 +1,7 @@
 // 口播练习器 service worker
-// v3: 不再依赖任何外部 CDN · 所有首屏资源同源 · 第一次访问也能离线
+// v5: fallback 按请求类型分流 · 不再把 index.html 喂给 JS / CSS 解析器
 // 策略：app shell + vendor + bundle 都走 cache-first；其它走 network-first
-const CACHE = 'kobo-trainer-v4';
+const CACHE = 'kobo-trainer-v5';
 const APP_SHELL = [
   './',
   './index.html',
@@ -56,7 +56,19 @@ self.addEventListener('fetch', (e) => {
           caches.open(CACHE).then(c => c.put(e.request, clone));
         }
         return r;
-      }).catch(() => caches.match('./index.html')))
+      }).catch(() => {
+        // fallback 按请求类型分流：
+        // - 页面导航失败 → 返回 index.html（SPA 离线兜底）
+        // - JS/CSS/font/image 等资源失败 → 返回真实的失败响应
+        //   （否则浏览器拿到 HTML 当 JS 解析，控制台一堆「MIME type not executable」噪音）
+        if (e.request.mode === 'navigate') {
+          return caches.match('./index.html');
+        }
+        return new Response('', {
+          status: 504,
+          statusText: 'Resource unavailable offline'
+        });
+      }))
     );
     return;
   }
