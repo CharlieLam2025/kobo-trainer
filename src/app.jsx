@@ -9660,57 +9660,20 @@ const SettingsPanel = ({ onClose }) => {
   );
 };
 
-// ============ Onboarding 引导（首次打开 · 4 屏）============
+// ============ Onboarding 引导（首次打开 · 1 屏）============
+// 4 屏 → 1 屏：用户没耐心翻 4 屏，第 2 屏就划走了。
+// 一屏一定要传达：是什么 / 怎么做 / 隐私承诺 / 立刻开始。
 const ONBOARDING_SLIDES = [
   {
-    no: '01 / 04',
+    no: '',
     bg: 'linear-gradient(135deg, #A30236 0%, #6E001E 100%)',
     emoji: '🎙️',
     title: '这是预演 · 不是发布',
-    body: '你不是被逼着出片 · 你只是在镜头前再讲一遍。\n降低面对镜头的门槛，强化"预演"的感觉。',
+    body: '抽题 → 镜头前讲一遍 → 看回放。30 秒就能完成一次。\n所有录像只在你自己手机，不上传、不分享。',
     bullets: [
-      '抽题 → 开口 → 复盘 —— 而已',
-      '不分享、不上传、不发出去',
-      '所有录像只在你自己手机 / 电脑',
-    ],
-  },
-  {
-    no: '02 / 04',
-    bg: 'linear-gradient(135deg, #F1A23F 0%, #C77A1C 100%)',
-    emoji: '🎯',
-    title: '五种预演模式',
-    body: '不知道讲什么？随便挑一个开始：',
-    bullets: [
-      '🎲 即兴 · 1384 题 · 倒计时硬逼',
-      '📜 提词器 · 粘爆款 / 关键词 freestyle',
-      '🎤 主持人 · AI 追问深挖你的观点',
-      '📘 教程 · 钩子结构 / PREP / 黄金圈',
-    ],
-  },
-  {
-    no: '03 / 04',
-    bg: 'linear-gradient(135deg, #10b981 0%, #047857 100%)',
-    emoji: '📅',
-    title: '打卡 ≠ 自我压榨',
-    body: '坚持 ≠ 每天都得练 · 累了就声明休息日，streak 不会断。',
-    bullets: [
-      '每日目标可自定义（条数 + 时长）',
-      '月历热力图 · 看到一年的形状',
-      '6 个核心徽章 · 真正的拐点才发奖',
-      '每周复盘弹窗 · 数据化看进步',
-    ],
-  },
-  {
-    no: '04 / 04',
-    bg: 'linear-gradient(135deg, #7c3aed 0%, #4c1d95 100%)',
-    emoji: '🌟',
-    title: '预演完后 · AI 全方位陪你',
-    body: '不是录完就完了 · 一条录像可以做 4 件事：',
-    bullets: [
-      '🎯 教练复盘 · 5 维评分 + 改进建议',
-      '🌐 模拟发布 · AI 评分 + 真实观众评论 + 数据',
-      '✨ 一稿多发 · 小红书 / 抖音文案自动生成',
-      '⭐ 标记高光 · 翻看自己的作品集找感觉',
+      '5 种模式 · 总有一个能让你开口',
+      '录完自动给你 AI 教练复盘',
+      '坚持累了？声明休息日 · streak 不会断',
     ],
     ctaLabel: '开始第一条预演',
   },
@@ -9753,15 +9716,17 @@ const Onboarding = ({ onDone }) => {
           </ul>
         </div>
 
-        {/* 底部：圆点 + 按钮 */}
+        {/* 底部：圆点 + 按钮（单屏 onboarding 不显示圆点） */}
         <div className="px-6 mt-6">
-          <div className="flex justify-center items-center gap-1.5 mb-5">
-            {ONBOARDING_SLIDES.map((_, i) => (
-              <span key={i}
-                className={`h-1.5 transition-all duration-300 ${i === idx ? 'bg-white w-8' : 'bg-white/40 w-1.5'}`}
-                style={{borderRadius:'1px'}} />
-            ))}
-          </div>
+          {ONBOARDING_SLIDES.length > 1 && (
+            <div className="flex justify-center items-center gap-1.5 mb-5">
+              {ONBOARDING_SLIDES.map((_, i) => (
+                <span key={i}
+                  className={`h-1.5 transition-all duration-300 ${i === idx ? 'bg-white w-8' : 'bg-white/40 w-1.5'}`}
+                  style={{borderRadius:'1px'}} />
+              ))}
+            </div>
+          )}
           <div className="flex items-center gap-2 max-w-md mx-auto">
             {idx > 0 && (
               <button onClick={() => setIdx(idx - 1)}
