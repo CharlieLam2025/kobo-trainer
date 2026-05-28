@@ -5017,6 +5017,85 @@ const AudienceViewButton = ({ cam, style = {}, className = '' }) => {
   );
 };
 
+// ============ 同题对比：今天 vs 上次同题 ============
+// 视频本身没存（saveVideoToDisk 写到用户文件夹或下载夹），但 transcript / duration
+// 存在 localStorage.savedFiles 里 · 所以能做「数据对比」：嗯啊数 / WPM / 时长
+// 三个指标 + 展开看上次转录稿
+const SameTopicCompare = ({ topic, currentTranscript, currentDuration }) => {
+  const { savedFiles } = useSettings();
+  const prior = useMemo(() => {
+    if (!topic) return null;
+    // savedFiles[0] 是刚保存的本次。从 [1:] 里找同 label 且有像样转录稿的最近一条
+    return (savedFiles || [])
+      .slice(1)
+      .find(f => f.label === topic && (f.transcript || '').trim().length > 10);
+  }, [savedFiles, topic]);
+
+  if (!prior) return null;
+
+  const priorWpm     = calculateWPM(prior.transcript, prior.duration || 0);
+  const priorFillers = analyzeFillerWords(prior.transcript);
+  const priorFillerTotal = priorFillers.reduce((s, f) => s + f.count, 0);
+
+  const currWpm     = calculateWPM(currentTranscript, currentDuration);
+  const currFillers = analyzeFillerWords(currentTranscript || '');
+  const currFillerTotal = currFillers.reduce((s, f) => s + f.count, 0);
+
+  const daysAgo = Math.max(1, Math.floor((Date.now() - (prior.ts || 0)) / 86400000));
+
+  const fillerDelta = currFillerTotal - priorFillerTotal;
+  const durDelta    = currentDuration - (prior.duration || 0);
+  // WPM 不分高低好坏（180-260 都是舒适区）· 只显示差值不打色
+
+  const fmtDelta = (d, unit = '') => d === 0 ? '持平' : `${d > 0 ? '+' : ''}${d}${unit}`;
+  const fillerColor = fillerDelta < 0 ? 'text-emerald-700' : fillerDelta > 0 ? 'text-[#A30236]' : 'text-stone-500';
+
+  return (
+    <Card className="p-5 mb-4 border-l-[3px] border-[#061A6C]">
+      <div className="flex items-center gap-2.5 mb-3">
+        <div className="w-8 h-8 bg-[#E9EBF5] text-[#061A6C] flex items-center justify-center" style={{borderRadius:'3px'}}>
+          <Icon name="refresh" size={16} strokeWidth={1.7}/>
+        </div>
+        <div>
+          <div className="text-stone-400 text-[9px] tracking-[0.18em] uppercase font-semibold">SAME TOPIC</div>
+          <div className="font-display font-bold text-[#061A6C] text-[14px] leading-none mt-0.5">
+            同题对比 · {daysAgo} 天前你录过这题
+          </div>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-3 gap-2 mt-4">
+        <div className="text-center p-3 bg-stone-50" style={{borderRadius:'3px'}}>
+          <div className="text-[9px] tracking-[0.16em] uppercase text-stone-400 font-bold">嗯啊数</div>
+          <div className="font-display font-bold text-[20px] tabular-nums mt-1 text-stone-900">{currFillerTotal}</div>
+          <div className={`text-[10px] mt-1 ${fillerColor}`}>
+            上次 {priorFillerTotal} · {fmtDelta(fillerDelta)}
+          </div>
+        </div>
+        <div className="text-center p-3 bg-stone-50" style={{borderRadius:'3px'}}>
+          <div className="text-[9px] tracking-[0.16em] uppercase text-stone-400 font-bold">WPM</div>
+          <div className="font-display font-bold text-[20px] tabular-nums mt-1 text-stone-900">{currWpm}</div>
+          <div className="text-[10px] mt-1 text-stone-500">上次 {priorWpm}</div>
+        </div>
+        <div className="text-center p-3 bg-stone-50" style={{borderRadius:'3px'}}>
+          <div className="text-[9px] tracking-[0.16em] uppercase text-stone-400 font-bold">时长</div>
+          <div className="font-display font-bold text-[20px] tabular-nums mt-1 text-stone-900">{currentDuration}s</div>
+          <div className="text-[10px] mt-1 text-stone-500">上次 {prior.duration || 0}s · {fmtDelta(durDelta, 's')}</div>
+        </div>
+      </div>
+
+      <details className="mt-4 pt-3 border-t border-stone-200">
+        <summary className="text-[11px] text-stone-500 cursor-pointer hover:text-stone-800 select-none">
+          📜 看上次怎么讲的（{daysAgo} 天前）
+        </summary>
+        <div className="text-[12px] text-stone-700 mt-2 leading-relaxed bg-stone-50 p-3" style={{borderRadius:'2px'}}>
+          {prior.transcript}
+        </div>
+      </details>
+    </Card>
+  );
+};
+
 // ============ Done View ============
 const DoneView = ({ blob, contextLabel, duration = 0, onRetry, onNew, extra, transcript = '' }) => {
   const url = useMemo(() => blob ? URL.createObjectURL(blob) : null, [blob]);
@@ -5216,6 +5295,11 @@ const DoneView = ({ blob, contextLabel, duration = 0, onRetry, onNew, extra, tra
 
       {/* 🎯 AI 教练复盘 */}
       {blob && <CoachReview topic={contextLabel} durationSec={duration} initialTranscript={transcript} />}
+
+      {/* ↻ 同题对比：今天 vs 上次同题（如果之前练过这题） */}
+      {blob && contextLabel && (
+        <SameTopicCompare topic={contextLabel} currentTranscript={transcript} currentDuration={duration} />
+      )}
 
       {/* 🚀 预演 → 发布链路 */}
       {blob && contextLabel && <PublishStep contextLabel={contextLabel} />}
