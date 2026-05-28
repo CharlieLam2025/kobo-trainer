@@ -5144,10 +5144,22 @@ const DoneView = ({ blob, contextLabel, duration = 0, onRetry, onNew, extra, tra
     const newlyUnlocked = detectNewlyUnlocked(settings.unlockedAchievements, unlocked)
       .map(id => ACHIEVEMENTS.find(a => a.id === id))
       .filter(Boolean);
+    // 习惯科学口径：「连续录过的天数」（不要求达成 goal）+「今天的总录像数」
+    // STREAK_DAY_MESSAGES 触发条件用这俩 · 跟硬 streak 解耦
+    const allTodayFiles = files.filter(f => (f.ts || 0) >= today0 && (f.ts || 0) < today0 + 86400000);
+    const dayKeys = new Set(files.map(f => dayKey(f.ts || 0)));
+    let softStreak = dayKeys.has(dayKey(today0)) ? 1 : 0;
+    let softCursor = today0 - 86400000;
+    while (dayKeys.has(dayKey(softCursor)) && softStreak < 365) {
+      softStreak++;
+      softCursor -= 86400000;
+    }
     return {
       todayCount: todayQualifying, goalCount: goal.count, streak,
       justHitGoal, newlyUnlocked, remaining: Math.max(0, goal.count - todayQualifying),
       qualified: (duration || 0) >= minDur,
+      softStreak,
+      isFirstOfDay: allTodayFiles.length === 1,
     };
   }, [settings.savedFiles, settings.dailyGoal, settings.unlockedAchievements, duration]);
 
@@ -5162,6 +5174,29 @@ const DoneView = ({ blob, contextLabel, duration = 0, onRetry, onNew, extra, tra
 
   return (
     <div className="fade-in">
+      {/* 习惯科学小奖：前 7 天每天首次录像 · 一句针对当天心理的话 · 不弹 toast 而是嵌入卡片 */}
+      {blob && feedbackStats.isFirstOfDay && feedbackStats.softStreak >= 1 && feedbackStats.softStreak <= 7 && STREAK_DAY_MESSAGES[feedbackStats.softStreak] && (() => {
+        const m = STREAK_DAY_MESSAGES[feedbackStats.softStreak];
+        return (
+          <Card className="mb-4 p-4 bg-stone-50 border-l-[3px]" style={{borderLeftColor: m.color}}>
+            <div className="flex items-start gap-3">
+              <div className="text-[32px] leading-none shrink-0">{m.emoji}</div>
+              <div className="flex-1 min-w-0">
+                <div className="text-stone-400 text-[9px] tracking-[0.18em] uppercase font-bold mb-1">
+                  DAY {feedbackStats.softStreak} · 习惯科学
+                </div>
+                <div className="font-display font-bold text-stone-900 text-[15px] leading-snug">
+                  {m.title}
+                </div>
+                <p className="text-[12px] text-stone-600 mt-1.5 leading-relaxed">
+                  {m.body}
+                </p>
+              </div>
+            </div>
+          </Card>
+        );
+      })()}
+
       {/* 即时反馈：+1 预演 + 进度 + 新成就 */}
       {blob && (
         <Card className="mb-4 overflow-hidden border-0" style={{background: feedbackStats.justHitGoal ? 'linear-gradient(135deg, #10b981 0%, #059669 100%)' : 'linear-gradient(135deg, #A30236 0%, #8E0230 100%)', color: '#fff'}}>
@@ -6159,6 +6194,26 @@ const groupByDay = (files) => {
   files.forEach(f => { const k = dayKey(f.ts); m[k] = (m[k]||0) + 1; });
   return m;
 };
+// 前 7 天每天都有一句具体的话 · 不是空泛鸡汤 · 引用习惯科学的具体说法
+// 设计原则：每个 day 的措辞针对当天最容易死的心理（无聊 / 自我怀疑 / 失去新鲜感）
+// 触发条件：streak 在 1-7 范围 + 今天第一条达标录像
+const STREAK_DAY_MESSAGES = {
+  1: { emoji:'🎬', color:'#A30236', title:'破冰了 · 这是今年最重要的 30 秒',
+       body:'很多想做 IP 的人卡在 Day 1 · 你已经迈过去了。明天再来一条，习惯回路才算真开始。' },
+  2: { emoji:'🌱', color:'#F1A23F', title:'Day 2 · 比 90% 想做 IP 的人多走了一天',
+       body:'第二天最难。不是因为累，是因为「新鲜感」消失了。挺过去就是你的护城河。' },
+  3: { emoji:'🔥', color:'#A30236', title:'Day 3 · streak 的第一个拐点',
+       body:'行为科学：连续 3 天才算「开始」。从今天起你不是「试一试的人」，是「在做的人」。' },
+  4: { emoji:'🧠', color:'#F1A23F', title:'Day 4 · 神经习惯回路开始成型',
+       body:'大脑已经开始把「打开 app」编码进自动反应。今天不是凭意志力来的，是身体记住了。' },
+  5: { emoji:'⚡', color:'#F1A23F', title:'Day 5 · 再 2 天解锁 streak 7',
+       body:'走到 Day 5 的人已经在前 5%。能解锁 streak 7 的人更少 —— 那是「真习惯」的门槛。' },
+  6: { emoji:'🎯', color:'#A30236', title:'Day 6 · 明天就是 streak 7',
+       body:'一周连续训练 · 这是习惯学公认的拐点。明天解锁后你不再是新手。' },
+  7: { emoji:'👑', color:'#10b981', title:'streak 7 · 你已经不是新手了',
+       body:'从 Day 8 开始，「打开 app」会比「不打开」更舒服。这就是你建立的护城河。' },
+};
+
 // 测试函数：参数 (files, streak)
 // 6 个核心徽章：1 个破冰 + 3 个连续 streak（早期/月/年）+ 2 个累计里程碑
 // 设计原则：每个徽章对应一个真正能改变用户行为的拐点 · 多了反而稀释成就感
