@@ -9810,6 +9810,7 @@ const ONBOARDING_SLIDES = [
     title: '这是预演 · 不是发布',
     body: '抽题 → 镜头前讲一遍 → 看回放。30 秒就能完成一次。\n所有录像只在你自己手机，不上传、不分享。',
     bullets: [
+      '第一周默认纯语音 · 不用面对镜头里的自己',
       '5 种模式 · 总有一个能让你开口',
       '录完自动给你 AI 教练复盘',
       '坚持累了？声明休息日 · streak 不会断',
@@ -9921,6 +9922,56 @@ const UpdateBanner = () => {
   );
 };
 
+// ============ 第一周渐进路径：纯语音 → 摄像头 ============
+// 新用户默认 voiceOnly · 录满 7 条触发一次性升级提示
+// 习惯科学 · 摄像头恐惧是第一周致死率最高的原因 · 把它从首周漏斗里挪走
+const VoiceUpgradePrompt = () => {
+  const { voiceOnly, setVoiceOnly, savedFiles } = useSettings();
+  const [show, setShow] = useState(false);
+
+  useEffect(() => {
+    if (!voiceOnly) return;
+    if (!savedFiles || savedFiles.length < 7) return;
+    try {
+      if (localStorage.getItem('kobo.voiceUpgradePrompted') === '1') return;
+    } catch { return; }
+    setShow(true);
+  }, [voiceOnly, savedFiles]);
+
+  const dismiss = (upgrade) => {
+    try { localStorage.setItem('kobo.voiceUpgradePrompted', '1'); } catch {}
+    if (upgrade) setVoiceOnly(false);
+    setShow(false);
+  };
+
+  if (!show) return null;
+  return (
+    <div className="fixed inset-0 z-[200] bg-stone-950/70 flex items-center justify-center px-5 fade-in">
+      <Card className="w-full max-w-sm p-6" onClick={e => e.stopPropagation()}>
+        <div className="text-center mb-4">
+          <div className="text-[48px] mb-2">🎬</div>
+          <div className="eyebrow eyebrow--crimson mb-2">7 条纯语音 · 拐点到了</div>
+          <h2 className="font-display font-bold text-stone-900 text-[20px] leading-tight mb-2">
+            准备好打开摄像头了吗？
+          </h2>
+          <p className="text-[13px] text-stone-600 leading-relaxed">
+            你这一周已经录了 7 条纯语音 · 开口的习惯有了。<br/>
+            现在试试看镜头里的自己 —— 随时可以切回纯语音。
+          </p>
+        </div>
+        <div className="flex flex-col gap-2 mt-5">
+          <Btn variant="primary" size="lg" onClick={() => dismiss(true)} className="w-full">
+            <Icon name="rec" size={14}/> 现在试试摄像头
+          </Btn>
+          <Btn variant="ghost" onClick={() => dismiss(false)} className="w-full">
+            还没准备好 · 继续语音
+          </Btn>
+        </div>
+      </Card>
+    </div>
+  );
+};
+
 // ============ App ============
 // DeepSeek key 不再硬编码 · 没填 key 时走 Cloudflare Worker 代理（每 IP 50 次/天）
 // 用户在"设置"里可填自己的 key 解锁无限调用
@@ -9965,8 +10016,18 @@ function App() {
   const saveDirRef = useRef(null); // saveDir 可能 stale，用 ref 给 removeSavedFile 用
 
   // 🎙️ 纯语音模式（不开摄像头 · 节电 + 隐私 · 仅录音）
+  // 新用户默认 ON · 摄像头恐惧是第一周致死率最高的原因
+  // 老用户（已经有 savedFiles 或显式设过）保持原来的设置
   const [voiceOnly, setVoiceOnlyState] = useState(() => {
-    try { return localStorage.getItem('kobo.voiceOnly') === '1'; } catch { return false; }
+    try {
+      const stored = localStorage.getItem('kobo.voiceOnly');
+      if (stored !== null) return stored === '1'; // 用户显式设过 · 尊重
+      // 没设过 · 看是否有历史录像决定默认值
+      const raw = localStorage.getItem('kobo.savedFiles');
+      const arr = raw ? JSON.parse(raw) : [];
+      const isNewUser = !Array.isArray(arr) || arr.length === 0;
+      return isNewUser; // 新用户：true（纯语音）· 老用户：false（开摄像头）
+    } catch { return false; }
   });
   const setVoiceOnly = useCallback((v) => {
     setVoiceOnlyState(v);
@@ -10187,6 +10248,9 @@ function App() {
 
       {/* SW 新版本就绪横幅（fixed 定位 · 自动浮在底部 tab 上方） */}
       <UpdateBanner />
+
+      {/* 第一周渐进路径：录满 7 条纯语音后 · 一次性提示开摄像头 */}
+      <VoiceUpgradePrompt />
     </>
   );
 
