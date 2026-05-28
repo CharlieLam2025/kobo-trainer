@@ -3770,7 +3770,37 @@ const NOTIFICATION_BODIES = [
   '🔥 别断 streak · 今天来一条',
 ];
 
-async function scheduleDailyReminder({ hour = 19, minute = 0, enabled = true }) {
+// 5 个 routine anchor · BJ Fogg 的「After I [既有动作], I will [新习惯]」recipe
+// 绑了 anchor 的习惯存活率是没绑的 4 倍（Lally 2010 习惯形成研究）
+// hour/minute = 这个 anchor 默认的通知时间建议 · 用户能在设置里覆盖
+// bodies = 这个 anchor 专属的通知文案 · 跟「刚做完那件事」对话 · 比泛泛的「该开口了」强 10 倍
+const ROUTINE_ANCHORS = [
+  { id:'morning_coffee', emoji:'☕', label:'喝完早咖啡', hour:9,  minute:0,  bodies:[
+    '咖啡喝完了吗？30 秒讲一条 · 接住今天的清醒',
+    '早咖啡 ✓ · 顺手 30 秒预演 · 一气呵成',
+    '今天的第一口下肚了 · 第一条预演也安排上',
+  ]},
+  { id:'after_brush', emoji:'🪥', label:'刷完牙之后', hour:8,  minute:0,  bodies:[
+    '刚刷完牙吧？30 秒预演 · 起床即开口',
+    '牙刷完了 · 嗓子也该唤醒了 · 来 30 秒',
+  ]},
+  { id:'commute', emoji:'🚇', label:'通勤路上', hour:8,  minute:30, bodies:[
+    '通勤路上有空？纯语音 30 秒 · 不开摄像头',
+    '坐稳了？30 秒预演 · 比刷短视频值得',
+    '通勤这 30 分钟 · 抽 30 秒给自己',
+  ]},
+  { id:'lunch_break', emoji:'🍱', label:'午饭后', hour:13, minute:30, bodies:[
+    '吃饱了想躺？给自己 30 秒 · 再躺',
+    '午饭 ✓ · 顺道把今天的预演了结了',
+  ]},
+  { id:'before_bed', emoji:'🌙', label:'睡前', hour:22, minute:0,  bodies:[
+    '今天还差一条预演 · 30 秒 · 然后睡',
+    '睡前最后一件事 · 30 秒讲一条 · 今天就完整了',
+  ]},
+];
+const getRoutineAnchor = (id) => ROUTINE_ANCHORS.find(a => a.id === id) || null;
+
+async function scheduleDailyReminder({ hour = 19, minute = 0, enabled = true, anchorId = null }) {
   const Cap = window.Capacitor;
   const LN = Cap?.Plugins?.LocalNotifications;
   // Web fallback：用浏览器 Notification API（限制大 · 仅页面打开时有效）
@@ -3788,8 +3818,10 @@ async function scheduleDailyReminder({ hour = 19, minute = 0, enabled = true }) 
     // 请求权限
     const perm = await LN.requestPermissions();
     if (perm.display !== 'granted') return { ok:false, reason:'permission_denied' };
-    // 调度每日重复
-    const body = NOTIFICATION_BODIES[Math.floor(Math.random() * NOTIFICATION_BODIES.length)];
+    // 调度每日重复 · 如果绑了 anchor 用 anchor 专属文案 · 否则用泛用文案
+    const anchor = anchorId ? getRoutineAnchor(anchorId) : null;
+    const pool = (anchor && anchor.bodies && anchor.bodies.length) ? anchor.bodies : NOTIFICATION_BODIES;
+    const body = pool[Math.floor(Math.random() * pool.length)];
     await LN.schedule({
       notifications: [{
         id: NOTIFICATION_ID,
@@ -3978,6 +4010,7 @@ const SettingsContext = React.createContext({
   voiceOnly: false, setVoiceOnly: () => {},
   reminderEnabled: false, setReminderEnabled: () => {},
   reminderTime: '19:00', setReminderTime: () => {},
+  routineAnchor: '', setRoutineAnchor: () => {},
 });
 const useSettings = () => React.useContext(SettingsContext);
 
@@ -6544,6 +6577,14 @@ const HomeView = ({ onSelect, onOpenSettings, onQuickStart, onStartWithTopic }) 
   const [showWeeklyRecap, setShowWeeklyRecap] = useState(false);
   // 「明天的话题」承诺 · 用户昨天预订给今天的题目
   const [tomorrowTopic, setTomorrowTopic] = useState(() => readTomorrowTopic());
+  // 「routine anchor」绑定状态 · 没绑且已经录过 1+ 条 · 显示绑定卡（除非用户暂时关掉）
+  const [anchorDismissed, setAnchorDismissed] = useState(() => {
+    try { return localStorage.getItem('kobo.anchorDismissed') === '1'; } catch { return false; }
+  });
+  const dismissAnchorCard = () => {
+    setAnchorDismissed(true);
+    try { localStorage.setItem('kobo.anchorDismissed', '1'); } catch {}
+  };
   const [dailyGreeting, setDailyGreeting] = useState('');
   // 月度战报海报
   const [reportBlob, setReportBlob] = useState(null);
@@ -6765,6 +6806,59 @@ const HomeView = ({ onSelect, onOpenSettings, onQuickStart, onStartWithTopic }) 
           <div className="text-stone-500 text-[9px] tracking-[0.16em] uppercase mt-1 font-semibold">今日 take 数</div>
         </div>
       </div>
+
+      {/* ╭─────────────────────────────╮  */}
+      {/* │   routine anchor 状态行     │  */}
+      {/* ╰─────────────────────────────╯  */}
+      {settings.routineAnchor && (() => {
+        const a = getRoutineAnchor(settings.routineAnchor);
+        if (!a) return null;
+        return (
+          <div className="flex items-center justify-between bg-stone-100 px-3 py-2 mb-4" style={{borderRadius:'3px'}}>
+            <span className="text-[11px] text-stone-700 flex items-center gap-2 min-w-0">
+              <span className="text-[14px] leading-none">🪝</span>
+              <span className="truncate">绑定到 <strong className="text-stone-900">{a.emoji} {a.label}</strong> · 通知文案已切换</span>
+            </span>
+            <button onClick={() => settings.setRoutineAnchor('')}
+              className="text-stone-400 hover:text-[#A30236] text-[11px] shrink-0 transition-colors">
+              解绑
+            </button>
+          </div>
+        );
+      })()}
+
+      {/* ╭─────────────────────────────╮  */}
+      {/* │   routine anchor 绑定卡     │  */}
+      {/* ╰─────────────────────────────╯  */}
+      {!settings.routineAnchor && !anchorDismissed && (settings.savedFiles?.length || 0) >= 1 && (
+        <Card className="p-4 mb-4 border-l-[3px] border-[#F1A23F]">
+          <div className="flex items-start gap-3 mb-3">
+            <div className="text-[24px] leading-none shrink-0">🪝</div>
+            <div className="flex-1 min-w-0">
+              <div className="text-stone-400 text-[9px] tracking-[0.18em] uppercase font-bold mb-1" style={{color:'#C77A1C'}}>
+                HABIT ANCHOR · 让明天更容易开始
+              </div>
+              <div className="font-display font-bold text-stone-900 text-[14px] leading-snug">
+                把 30 秒预演 · 绑到你已经在做的事
+              </div>
+              <p className="text-[11px] text-stone-600 mt-1 leading-relaxed">
+                BJ Fogg：「After I 既有动作 · I will 新习惯」· 绑了的习惯存活率是没绑的 4 倍。
+              </p>
+            </div>
+            <button onClick={dismissAnchorCard} className="text-stone-400 hover:text-stone-700 text-lg leading-none px-1 shrink-0" aria-label="先不绑">×</button>
+          </div>
+          <div className="grid grid-cols-2 gap-1.5">
+            {ROUTINE_ANCHORS.map(a => (
+              <button key={a.id} onClick={() => settings.setRoutineAnchor(a.id)}
+                className="text-left p-2.5 border border-stone-200 hover:border-[#A30236] hover:bg-[#FBEFF2] transition-colors flex items-center gap-2"
+                style={{borderRadius:'3px'}}>
+                <span className="text-[18px] leading-none shrink-0">{a.emoji}</span>
+                <span className="text-[12px] font-semibold text-stone-700 truncate">{a.label}</span>
+              </button>
+            ))}
+          </div>
+        </Card>
+      )}
 
       {/* ╭─────────────────────────────╮  */}
       {/* │   AI 每日激励语              │  */}
@@ -10345,13 +10439,39 @@ function App() {
     setReminderTimeState(t);
     try { localStorage.setItem('kobo.reminderTime', t); } catch {}
   }, []);
-  // 当 enabled / time 变化 · 重新调度
+
+  // 🪝 routine anchor · 「After I [既有动作], I will [新习惯]」绑定
+  // 影响：通知文案 + HomeView 轻提示
+  const [routineAnchor, setRoutineAnchorState] = useState(() => {
+    try { return localStorage.getItem('kobo.routineAnchor') || ''; } catch { return ''; }
+  });
+  const setRoutineAnchor = useCallback((id) => {
+    setRoutineAnchorState(id || '');
+    try {
+      if (id) localStorage.setItem('kobo.routineAnchor', id);
+      else localStorage.removeItem('kobo.routineAnchor');
+    } catch {}
+    // 设置 anchor 时自动建议它的时间（仅当用户没改过 reminderTime）
+    const a = getRoutineAnchor(id);
+    if (a) {
+      try {
+        const userSetTime = localStorage.getItem('kobo.reminderTimeUserSet') === '1';
+        if (!userSetTime) {
+          const newTime = `${String(a.hour).padStart(2,'0')}:${String(a.minute).padStart(2,'0')}`;
+          setReminderTimeState(newTime);
+          localStorage.setItem('kobo.reminderTime', newTime);
+        }
+      } catch {}
+    }
+  }, []);
+
+  // 当 enabled / time / anchor 变化 · 重新调度（anchor 影响通知文案）
   useEffect(() => {
     const [h, m] = reminderTime.split(':').map(x => parseInt(x) || 0);
-    scheduleDailyReminder({ hour: h, minute: m, enabled: reminderEnabled }).then(r => {
+    scheduleDailyReminder({ hour: h, minute: m, enabled: reminderEnabled, anchorId: routineAnchor || null }).then(r => {
       console.log('[Reminder]', r);
     });
-  }, [reminderEnabled, reminderTime]);
+  }, [reminderEnabled, reminderTime, routineAnchor]);
 
   // 已"见过"的成就（避免每次访问都弹动画）
   const [unlockedAchievements, setUnlockedAchievementsState] = useState(() => {
@@ -10499,7 +10619,8 @@ function App() {
     restDays, addRestDay, removeRestDay,
     voiceOnly, setVoiceOnly,
     reminderEnabled, setReminderEnabled, reminderTime, setReminderTime,
-  }), [apiKey, userApiKey, isBuiltinKey, setApiKey, saveDir, savedFiles, addSavedFile, updateSavedFile, removeSavedFile, clearAllSavedFiles, dailyGoal, setDailyGoal, unlockedAchievements, markAchievementsSeen, lastWeeklyRecap, setLastWeeklyRecap, restDays, addRestDay, removeRestDay, voiceOnly, setVoiceOnly, reminderEnabled, setReminderEnabled, reminderTime, setReminderTime]);
+    routineAnchor, setRoutineAnchor,
+  }), [apiKey, userApiKey, isBuiltinKey, setApiKey, saveDir, savedFiles, addSavedFile, updateSavedFile, removeSavedFile, clearAllSavedFiles, dailyGoal, setDailyGoal, unlockedAchievements, markAchievementsSeen, lastWeeklyRecap, setLastWeeklyRecap, restDays, addRestDay, removeRestDay, voiceOnly, setVoiceOnly, reminderEnabled, setReminderEnabled, reminderTime, setReminderTime, routineAnchor, setRoutineAnchor]);
 
   // Mode → title for MobileHeader
   const headerSub = useMemo(() => {
