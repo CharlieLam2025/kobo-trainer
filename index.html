@@ -279,10 +279,22 @@
 </script>
 <script src="bundle.js"></script>
 <script>
-  // PWA: 注册 service worker（仅在可用环境下）
+  // PWA: 注册 service worker · 带「新版本就绪」提醒机制
+  // sw.js install 时 skipWaiting + activate 时 claim · 所以新 SW 接管页面就是「有更新」
   if ('serviceWorker' in navigator) {
-    window.addEventListener('load', () => {
-      navigator.serviceWorker.register('sw.js').catch(err => console.warn('SW register failed:', err));
+    window.addEventListener('load', function() {
+      // 页面加载时如果已有 controller = 老用户（之前装过 SW）· 之后的 controllerchange 才是「更新」
+      var hadControllerOnLoad = !!navigator.serviceWorker.controller;
+
+      navigator.serviceWorker.register('sw.js').then(function(reg){
+        // 每 30 分钟主动 ping 一次新 sw.js · 让长时间不关页面的用户也能拿到更新
+        setInterval(function(){ reg.update().catch(function(){}); }, 30 * 60 * 1000);
+      }).catch(function(err){ console.warn('SW register failed:', err); });
+
+      navigator.serviceWorker.addEventListener('controllerchange', function(){
+        if (!hadControllerOnLoad) return; // 首次安装不算更新
+        window.dispatchEvent(new CustomEvent('kobo:sw-update-ready'));
+      });
     });
   }
 </script>

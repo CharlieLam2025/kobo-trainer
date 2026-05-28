@@ -9747,6 +9747,41 @@ const Onboarding = ({ onDone }) => {
   );
 };
 
+// ============ SW 更新提醒 ============
+// PWA 装到桌面后用户大多不刷新 · 推了新版也看不到
+// 机制：sw.js 在 install 时已经 skipWaiting + claim → 新 SW 接管时触发
+//   navigator.serviceWorker.controllerchange → index.html 派发 kobo:sw-update-ready
+//   → 本组件监听到 → 弹横幅「新版本已就绪」→ 用户点 = location.reload()
+const UpdateBanner = () => {
+  const [show, setShow] = useState(false);
+  useEffect(() => {
+    const onUpdate = () => setShow(true);
+    window.addEventListener('kobo:sw-update-ready', onUpdate);
+    return () => window.removeEventListener('kobo:sw-update-ready', onUpdate);
+  }, []);
+  if (!show) return null;
+  return (
+    <div className="fixed left-1/2 -translate-x-1/2 z-[150] fade-in"
+         style={{bottom: 'calc(env(safe-area-inset-bottom, 0px) + 76px)'}}>
+      <div className="flex items-center gap-3 px-4 py-2.5 bg-[#061A6C] text-white shadow-lg"
+           style={{borderRadius:'4px', minWidth: 280}}>
+        <Icon name="sparkle" size={18} className="text-[#F1A23F] shrink-0" strokeWidth={2} />
+        <div className="flex-1 text-[13px] font-medium leading-tight">
+          新版本已就绪 · 一键加载
+        </div>
+        <button onClick={() => window.location.reload()}
+          className="px-3 py-1 text-[12px] font-bold bg-white text-[#061A6C] hover:bg-stone-100"
+          style={{borderRadius:'3px'}}>
+          刷新
+        </button>
+        <button onClick={() => setShow(false)}
+          className="text-white/50 hover:text-white text-lg leading-none px-1"
+          aria-label="关闭">×</button>
+      </div>
+    </div>
+  );
+};
+
 // ============ App ============
 // DeepSeek key 不再硬编码 · 没填 key 时走 Cloudflare Worker 代理（每 IP 50 次/天）
 // 用户在"设置"里可填自己的 key 解锁无限调用
@@ -10003,6 +10038,9 @@ function App() {
 
       {/* Settings rendered INSIDE phone shell so it's contained */}
       {settingsOpen && <SettingsPanel onClose={() => setSettingsOpen(false)} />}
+
+      {/* SW 新版本就绪横幅（fixed 定位 · 自动浮在底部 tab 上方） */}
+      <UpdateBanner />
     </>
   );
 
