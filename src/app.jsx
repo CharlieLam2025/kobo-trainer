@@ -8781,50 +8781,27 @@ const ENDLESS_INTERVALS = [
   { value: 120, label: '2min', desc: '完整短视频' },
 ];
 
-// 训练课程预设：按训练目标分组，方便选择 + 渲染
+// 训练课程预设：6 套覆盖「短/中/长 + 微/框架/挑战」六个维度，消除重复
+// 选择疲劳是真实存在的 · 16 套预设里大多数差异 < 30% · 用户会进入「不知道选哪个」的瘫痪状态
 const SESSION_PRESET_GROUPS = [
   {
-    id: 'base',
-    label: '🌱 基础节奏',
-    blurb: '日常训练 · 从轻到重',
+    id: 'daily',
+    label: '🌱 日常训练',
+    blurb: '从短到长 · 一日三档随心选',
     presets: [
-      { id:'warmup',   emoji:'🌅', name:'早间预热', sessionMin:5,  intervalSec:30, source:'日常观点', desc:'10 题 × 30s · 轻松开嗓' },
-      { id:'quick',    emoji:'⚡', name:'短闪训练', sessionMin:10, intervalSec:60, source:'__all__',  desc:'10 题 × 60s · 全类别混合' },
-      { id:'standard', emoji:'💪', name:'标准集训', sessionMin:20, intervalSec:60, source:'__all__',  desc:'20 题 × 60s · 日常主力' },
-      { id:'marathon', emoji:'🏃', name:'马拉松',   sessionMin:60, intervalSec:60, source:'__all__',  desc:'60 题 · 60 分钟持续输出' },
+      { id:'quick',    emoji:'⚡', name:'短闪训练', sessionMin:10, intervalSec:60, source:'__all__',  desc:'10 题 × 60s · 全类别混合 · 通勤档' },
+      { id:'standard', emoji:'💪', name:'标准集训', sessionMin:20, intervalSec:60, source:'__all__',  desc:'20 题 × 60s · 每日主力档' },
+      { id:'marathon', emoji:'🏃', name:'马拉松',   sessionMin:60, intervalSec:60, source:'__all__',  desc:'60 题 × 60 分钟 · 周末长档' },
     ],
   },
   {
-    id: 'micro',
-    label: '⚡ 极短特训（钩子 / 收尾 / 闪电体）',
-    blurb: '15-20s 极限压缩 · 练抖音爆款节奏',
+    id: 'focus',
+    label: '🎯 重点突破',
+    blurb: '想专门攻一个能力时来这里',
     presets: [
-      { id:'hook',    emoji:'🪝', name:'钩子专训', sessionMin:5, intervalSec:15, source:'__all__', desc:'20 题 × 15s · 只练前 5 秒钩子', tip:'只要前 5 秒抓人 · 后面别管' },
-      { id:'closer',  emoji:'🎯', name:'收尾专训', sessionMin:5, intervalSec:15, source:'__all__', desc:'20 题 × 15s · 练 CTA 收尾',     tip:'一句金句或一个 action · 收住' },
-      { id:'flash',   emoji:'⚡', name:'闪电体',  sessionMin:8, intervalSec:20, source:'__all__', desc:'24 题 × 20s · 抖音爆款节奏',    tip:'一句话讲完 · 不要展开' },
-    ],
-  },
-  {
-    id: 'framework',
-    label: '📐 框架结构训练',
-    blurb: '强制按表达框架开口 · 边练边内化',
-    presets: [
-      { id:'prep',     emoji:'📐', name:'PREP 集训', sessionMin:15, intervalSec:90,  source:'观点表达', desc:'10 题 × 90s · Point-Reason-Example-Point', framework:['观点','理由','例子','重申'],     tip:'P → R → E → P · 严格走结构' },
-      { id:'golden',   emoji:'⭕', name:'黄金圈',    sessionMin:15, intervalSec:90,  source:'__all__',  desc:'10 题 × 90s · Why-How-What',                framework:['Why','How','What'],              tip:'从 Why 切入 · 不要直接讲 What' },
-      { id:'story3',   emoji:'📖', name:'故事三幕',  sessionMin:12, intervalSec:120, source:'__all__',  desc:'6 题 × 120s · 用故事代替讲道理',            framework:['钩子开场','冲突反转','结局/感悟'], tip:'用故事讲 · 不要直接给结论' },
-      { id:'fcf',      emoji:'🎢', name:'FCF 结构',  sessionMin:12, intervalSec:90,  source:'__all__',  desc:'8 题 × 90s · Fact-Conflict-Forward',         framework:['事实','反差','前瞻'],            tip:'事实 → 反差 → 我怎么看' },
-    ],
-  },
-  {
-    id: 'deep',
-    label: '🎬 深度 / 反向 / 挑战',
-    blurb: '把舒适区往外推',
-    presets: [
-      { id:'longshot', emoji:'🎬', name:'长镜头',     sessionMin:25, intervalSec:300, source:'观点表达', desc:'5 题 × 5min · 知乎答主体',  tip:'不要赶 · 把一件事讲透' },
-      { id:'devil',    emoji:'😈', name:'反向辩护',   sessionMin:15, intervalSec:90,  source:'即兴反驳', desc:'10 题 × 90s · 站对立面',   tip:'不管认不认同 · 必须为对立面辩护' },
-      { id:'storypol', emoji:'🎭', name:'观点专场',   sessionMin:20, intervalSec:90,  source:'观点表达', desc:'13 题 × 90s · 练立场表达' },
-      { id:'intense',  emoji:'🔥', name:'高强度',     sessionMin:30, intervalSec:60,  source:'即兴反驳', desc:'30 题 × 60s · 反驳拉极限' },
-      { id:'wild',     emoji:'🧠', name:'脑洞场',     sessionMin:15, intervalSec:60,  source:'脑洞',     desc:'15 题 × 60s · 想象力训练' },
+      { id:'hook',  emoji:'🪝', name:'钩子专训', sessionMin:5,  intervalSec:15, source:'__all__',  desc:'20 题 × 15s · 只练前 5 秒抓人',    tip:'只要前 5 秒抓人 · 后面别管' },
+      { id:'prep',  emoji:'📐', name:'PREP 集训', sessionMin:15, intervalSec:90, source:'观点表达', desc:'10 题 × 90s · Point-Reason-Example-Point', framework:['观点','理由','例子','重申'], tip:'P → R → E → P · 严格走结构' },
+      { id:'devil', emoji:'😈', name:'反向辩护', sessionMin:15, intervalSec:90, source:'即兴反驳', desc:'10 题 × 90s · 站对立面 · 把舒适区往外推', tip:'不管认不认同 · 必须为对立面辩护' },
     ],
   },
 ];
