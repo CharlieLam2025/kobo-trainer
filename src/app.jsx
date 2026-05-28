@@ -3725,8 +3725,8 @@ ${text}`;
 
 // DeepSeek 每日激励语：根据用户当前状态生成一句话开场
 async function deepseekDailyGreeting({ apiKey, streak, totalCount, weekCount, dayOfWeek, isRestDay, todayCount, goalCount }) {
-  const sys = '你是一个温暖、有创作经验的内容创作者朋友。给用户写一句开场打招呼，口语化、不要鸡汤、不要"加油"这种空话。';
-  const usr = `用户状态：
+  const sys = '你是一个温暖、有创作经验的内容创作者朋友。给用户写一句开场打招呼，口语化、不要鸡汤、不要"加油"这种空话。把用户当「同行的创作者」对话，不是「需要被鼓励的学员」。';
+  const usr = `用户状态（你的同行）：
 - 连续 ${streak} 天达成目标
 - 累计 ${totalCount} 条预演
 - 本周已录 ${weekCount} 条
@@ -3737,15 +3737,18 @@ async function deepseekDailyGreeting({ apiKey, streak, totalCount, weekCount, da
 要求：
 - 1 句话，30-50 字
 - 口语化，像朋友说话
+- 用「身份」语言，不用「鼓励」语言：
+  · 不说「你真棒、加油坚持、你做得到」这类
+  · 说「这就是创作者的日常 / 你的训练节奏 / 你已经是 X 了」这类
 - 根据连续天数调整：
-  · 0 天：温柔欢迎，鼓励开启
-  · 1-3 天：表扬上手快
+  · 0 天：温柔欢迎，把「想做内容」的他正名为「创作者」
+  · 1-3 天：肯定他已经在做创作者会做的事
   · 4-7 天：肯定养成习惯，提个小升级
   · 8-30 天：当老朋友聊
-  · 30+ 天：彼此认可，谈创作
-- 如果是休息日：肯定他的节奏感
+  · 30+ 天：彼此认可，聊创作本身
+- 如果是休息日：肯定他的节奏感（不是「休息也是为了更好出发」这种空话）
 - 如果今天目标已达成：肯定 + 给点延伸思考
-- 如果还差几条：自然 nudge
+- 如果还差几条：自然 nudge，不催
 
 仅返回这一句话，不要前缀 / 引号 / 解释。`;
   const data = await chatComplete({
@@ -6552,15 +6555,15 @@ const HomeView = ({ onSelect, onOpenSettings, onQuickStart }) => {
             {dateStr} · 星期{dayOfWeek}
           </div>
           <h1 className="font-display font-bold text-stone-900 m-0 leading-[1.1] tracking-tight" style={{fontSize:'26px'}}>
-            今天先预演一条
+            训练中的创作者
           </h1>
-          <p className="text-[10px] text-stone-500 mt-1 leading-tight">在发布前 · 先讲给镜头听</p>
+          <p className="text-[10px] text-stone-500 mt-1 leading-tight">不发布 · 先对自己交账</p>
         </div>
         <div className="text-right">
           <div className={`font-display font-bold leading-none tabular-nums ${stats.todayMet ? 'text-emerald-600' : 'text-stone-900'}`} style={{fontSize:'22px'}}>
             {stats.todayCount}<span className="text-stone-400 text-[14px]">/{stats.goalCount}</span>
           </div>
-          <div className="text-stone-500 text-[9px] tracking-[0.16em] uppercase mt-1 font-semibold">今日已练</div>
+          <div className="text-stone-500 text-[9px] tracking-[0.16em] uppercase mt-1 font-semibold">今日 take 数</div>
         </div>
       </div>
 
@@ -6696,7 +6699,7 @@ const HomeView = ({ onSelect, onOpenSettings, onQuickStart }) => {
             <div className="flex items-center justify-between mb-3 flex-wrap gap-1">
               <div className="flex items-center gap-2">
                 <span className="w-1 h-3.5 bg-[#A30236]" />
-                <h3 className="font-display font-bold text-stone-900 text-[13px] m-0">最近 4 周 · 预演活跃度</h3>
+                <h3 className="font-display font-bold text-stone-900 text-[13px] m-0">「训练中的创作者」的形状</h3>
               </div>
               <div className="flex items-center gap-1 text-[9px] text-stone-500">
                 <span className="w-2 h-2 bg-stone-100" style={{borderRadius:'1px'}}/>0
