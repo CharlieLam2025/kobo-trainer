@@ -5448,8 +5448,10 @@ const DoneView = ({ blob, contextLabel, duration = 0, onRetry, onNew, extra, tra
           <div className="text-stone-400 text-sm p-8 text-center">录制为空（可能时长太短或权限被拒）</div>
         )}
 
-        {/* 给这条录像打标签：高光 / 待重录 / 已发布 */}
-        {saveStatus.state === 'saved' && saveStatus.filename && (
+        {/* 给这条录像打标签：高光 / 待重录 / 已发布
+            < 10 条录像时隐藏 · 还没攒够「需要组织」的量 · 早期 UI 噪音
+            到 10 条（约一周的连续练习）· 用户开始有「这条好 / 那条想重录」的诉求 */}
+        {saveStatus.state === 'saved' && saveStatus.filename && (settings.savedFiles?.length || 0) >= 10 && (
           <FileTagger filename={saveStatus.filename} />
         )}
       </Card>
@@ -6119,7 +6121,7 @@ const RecordingHistoryList = ({ settings: s }) => {
                 </div>
                 <div className="text-stone-400 text-[10px] truncate">{ds} · {f.filename}</div>
               </div>
-              <FileTagger filename={f.filename} compact />
+              {(s.savedFiles?.length || 0) >= 10 && <FileTagger filename={f.filename} compact />}
               <button onClick={() => {
                 if (window.confirm(`删除这条录像？\n\n${f.label || f.filename}\n${f.method === 'folder' ? '磁盘文件也会被删除。' : '只删除历史条目，系统下载夹里的文件保留。'}`)) {
                   if (realIdx >= 0) s.removeSavedFile(realIdx);
@@ -7615,41 +7617,10 @@ const ImprovMode = ({ intent, clearIntent }) => {
           ))}
         </div>
 
-        {/* AI 生成 */}
-        <div className="mt-5 pt-5 border-t border-stone-200">
-          <div className="mb-3 flex items-center gap-2 flex-wrap">
-            <span className="text-xs text-stone-500 font-medium flex items-center gap-1"><Icon name="sparkle" size={13} className="text-[#A30236]"/> AI 生成</span>
-            <Tag color="violet">DeepSeek</Tag>
-          </div>
-          <div className="flex gap-2 flex-wrap">
-            <input
-              value={aiTheme}
-              onChange={e => setAiTheme(e.target.value)}
-              onKeyDown={e => { if (e.key === 'Enter' && aiTheme.trim() && !aiLoading) generateAI(); }}
-              placeholder="输入主题，例如：AI 时代的真实"
-              className="flex-1 min-w-[200px] px-3 py-2 border border-stone-300 rounded-lg text-sm focus:outline-none focus:border-amber-400"
-            />
-            <Btn variant="accent" onClick={generateAI} disabled={!aiTheme.trim() || aiLoading}>
-              {aiLoading ? '生成中...' : '生成 6 题'}
-            </Btn>
-          </div>
-          {aiError && <div className="text-red-600 text-xs mt-2">{aiError}</div>}
-          {aiPool.length > 0 && (
-            <div className="mt-3">
-              <div className="text-xs text-stone-500 mb-2">AI 生成的选题（点任意一个使用）：</div>
-              <div className="flex flex-wrap gap-2">
-                {aiPool.map((t, i) => (
-                  <button key={i} onClick={() => { setSource(AI_SOURCE); setTopic(t); }}
-                    className={`px-3 py-2 rounded-lg text-sm transition-all ${
-                      source === AI_SOURCE && topic === t
-                        ? 'bg-amber-400 text-stone-900 ring-2 ring-amber-300'
-                        : 'bg-violet-100 text-violet-900 hover:bg-violet-200'
-                    }`}>{t}</button>
-                ))}
-              </div>
-            </div>
-          )}
-        </div>
+        {/* AI 选题（输入主题 → 生成 6 题）已经砍掉。
+            第一性原理：「不知道讲什么」的痛点 · 用 1300+ 题随机抽 1 步就能解
+            AI 选题要 4 步：想主题 → 输入 → 等 → 挑一条。本末倒置。
+            想练特定主题的高级用户可以用提词器模式自己写。 */}
       </Card>
 
       <Card className="p-6">
@@ -9880,35 +9851,7 @@ const EndlessMode = () => {
             </button>
           ))}
         </div>
-        <div className="mt-4 pt-4 border-t border-stone-200">
-          <div className="flex items-center gap-2 mb-2 flex-wrap">
-            <Icon name="sparkle" size={14} className="text-[#A30236]" />
-            <span className="text-xs font-medium text-stone-700">AI 实时生成（一次 10 题）</span>
-          </div>
-          <div className="flex gap-2 flex-wrap">
-            <input
-              value={aiTheme}
-              onChange={e => setAiTheme(e.target.value)}
-              onKeyDown={e => { if (e.key === 'Enter' && aiTheme.trim() && !aiLoading) generateAI(); }}
-              placeholder="主题：真实即护城河"
-              className="flex-1 min-w-[120px] px-2.5 py-1.5 border border-stone-300 text-sm focus:outline-none focus:border-[#A30236]"
-              style={{ borderRadius: '2px' }}
-            />
-            <Btn variant="accent" size="sm" onClick={generateAI} disabled={!aiTheme.trim() || aiLoading}>
-              {aiLoading ? '生成中...' : '生成'}
-            </Btn>
-          </div>
-          {aiError && <div className="text-red-600 text-xs mt-1.5">{aiError}</div>}
-          {aiPool.length > 0 && (
-            <div className="mt-2 text-xs text-stone-700">
-              <span className="font-medium">已生成 {aiPool.length} 题：</span>
-              <span className="text-stone-500">{aiPool.slice(0, 2).join(' / ')}...</span>
-              <button onClick={() => setSource(AI_SOURCE)}
-                className={`ml-2 underline ${source === AI_SOURCE ? 'text-[#A30236] font-medium' : 'text-stone-600'}`}
-              >{source === AI_SOURCE ? '✓ 已选' : '用这批'}</button>
-            </div>
-          )}
-        </div>
+        {/* AI 实时生成已经砍掉 · 跟 ImprovMode 同理 · 1300+ 题随机抽足够覆盖 */}
       </Card>
 
       <Card className="p-5">
