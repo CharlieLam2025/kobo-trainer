@@ -4092,6 +4092,28 @@ const bboxOf = (lm, idx, w, h) => {
   return { x:minX, y:minY, w:maxX-minX, h:maxY-minY, cx:(minX+maxX)/2, cy:(minY+maxY)/2 };
 };
 
+// 带 progress 的 fetch · 用于 MediaPipe wasm/model 预热缓存
+// 浏览器 HTTP cache + SW cache 自然记下 · MediaPipe 后续 fetch 同 URL 走缓存秒到位
+// 不返回 body · 只为了让缓存有 · onProgress 收 0-100 整数（基于 Content-Length 比例）
+async function fetchWithProgress(url, onProgress) {
+  try {
+    const res = await fetch(url);
+    if (!res.ok || !res.body) return false;
+    const total = parseInt(res.headers.get('Content-Length') || '0', 10);
+    const reader = res.body.getReader();
+    let received = 0;
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      received += (value?.length || 0);
+      if (total > 0 && typeof onProgress === 'function') {
+        onProgress(Math.min(99, Math.round((received / total) * 100)));
+      }
+    }
+    return true;
+  } catch { return false; }
+}
+
 // ===== 美颜 hook：MediaPipe 检测 + canvas 2D 应用 =====
 function useCamera() {
   // 读取全局"纯语音"设置 · settings 可能在 Context 外被调用，因此用 try/catch 兜底
@@ -4125,6 +4147,8 @@ function useCamera() {
   const [bgBlur,       setBgBlur]       = useState(0);
   const [faceFxReady,  setFaceFxReady]  = useState(false); // MediaPipe 是否加载就绪
   const [faceFxLoading,setFaceFxLoading]= useState(false);
+  // 0-100 · 用 fetchWithProgress 预热缓存的实时进度 · 让用户知道在下东西 · 不是 app 卡死
+  const [faceFxProgress, setFaceFxProgress] = useState(0);
   const skinRef = useRef(0); skinRef.current = skinSmooth;
   const slimRef = useRef(0); slimRef.current = faceSlim;
   const enlargeRef = useRef(0); enlargeRef.current = eyeEnlarge;
@@ -4149,24 +4173,32 @@ function useCamera() {
   }, [filterPreset, beautyLevel]);
 
   // 懒加载 FaceLandmarker：用户开启任一面部 FX 时才初始化
+  // 关键改造：在调 MediaPipe 之前 · 用 fetchWithProgress 预热 wasm + model 的缓存
+  //   · 14MB 下载用真实进度条 · 不再「点了等 10 秒以为 app 死了」
   const ensureLandmarker = useCallback(async () => {
     if (landmarkerRef.current) return landmarkerRef.current;
     if (!window.__MEDIAPIPE) return null;
     setFaceFxLoading(true);
+    setFaceFxProgress(0);
     try {
       const { FilesetResolver, FaceLandmarker } = window.__MEDIAPIPE;
-      // wasm 路径：相对 index.html
+      const wasmUrl  = new URL('./mediapipe/vision_wasm_internal.wasm', window.location.href).href;
+      const modelUrl = new URL('./mediapipe/face_landmarker.task', window.location.href).href;
+      // 预热缓存 · wasm (~9.5MB) 占 70% · model (~3.8MB) 占 30%
+      await Promise.all([
+        fetchWithProgress(wasmUrl,  p => setFaceFxProgress(Math.round(p * 0.7))),
+        fetchWithProgress(modelUrl, p => setFaceFxProgress(70 + Math.round(p * 0.3))),
+      ]);
+      setFaceFxProgress(95);  // 真正实例化 MediaPipe（拿缓存 · 通常 < 1s）
       const vision = await FilesetResolver.forVisionTasks(new URL('./mediapipe/', window.location.href).href);
       const lm = await FaceLandmarker.createFromOptions(vision, {
-        baseOptions: {
-          modelAssetPath: new URL('./mediapipe/face_landmarker.task', window.location.href).href,
-          delegate: 'GPU',
-        },
+        baseOptions: { modelAssetPath: modelUrl, delegate: 'GPU' },
         outputFaceBlendshapes: false,
         runningMode: 'VIDEO',
         numFaces: 1,
       });
       landmarkerRef.current = lm;
+      setFaceFxProgress(100);
       return lm;
     } catch (e) {
       console.warn('[FaceLandmarker] init failed:', e?.message || e);
@@ -4177,23 +4209,31 @@ function useCamera() {
   }, []);
 
   // 懒加载 ImageSegmenter：背景虚化打开时才初始化
+  // 同样先用 fetchWithProgress 预热 · 跟 ensureLandmarker 共用同一 progress state
   const ensureSegmenter = useCallback(async () => {
     if (segmenterRef.current) return segmenterRef.current;
     if (!window.__MEDIAPIPE) return null;
     setFaceFxLoading(true);
+    setFaceFxProgress(0);
     try {
       const { FilesetResolver, ImageSegmenter } = window.__MEDIAPIPE;
+      const wasmUrl  = new URL('./mediapipe/vision_wasm_internal.wasm', window.location.href).href;
+      const modelUrl = new URL('./mediapipe/selfie_segmenter.tflite', window.location.href).href;
+      // wasm 占 90%（9.5MB）· segmenter 模型只有 ~240KB · 占 10% 已足够
+      await Promise.all([
+        fetchWithProgress(wasmUrl,  p => setFaceFxProgress(Math.round(p * 0.9))),
+        fetchWithProgress(modelUrl, p => setFaceFxProgress(90 + Math.round(p * 0.1))),
+      ]);
+      setFaceFxProgress(95);
       const vision = await FilesetResolver.forVisionTasks(new URL('./mediapipe/', window.location.href).href);
       const sg = await ImageSegmenter.createFromOptions(vision, {
-        baseOptions: {
-          modelAssetPath: new URL('./mediapipe/selfie_segmenter.tflite', window.location.href).href,
-          delegate: 'GPU',
-        },
+        baseOptions: { modelAssetPath: modelUrl, delegate: 'GPU' },
         runningMode: 'VIDEO',
         outputCategoryMask: true,
         outputConfidenceMasks: false,
       });
       segmenterRef.current = sg;
+      setFaceFxProgress(100);
       return sg;
     } catch (e) {
       console.warn('[ImageSegmenter] init failed:', e?.message || e);
@@ -4509,7 +4549,7 @@ function useCamera() {
     faceSlim,     setFaceSlim,
     eyeEnlarge,   setEyeEnlarge,
     bgBlur,       setBgBlur,
-    faceFxReady,  faceFxLoading,
+    faceFxReady,  faceFxLoading,  faceFxProgress,
     voiceOnly: voiceOnlySetting,
     streamRef, // 给 AudioVisualizer 用
   };
@@ -4881,12 +4921,22 @@ const FilterSheet = ({ cam, onClose }) => {
             ))}
           </div>
 
-          <div className="text-[10px] text-white/50 uppercase tracking-[0.2em] font-bold pt-2 flex items-center gap-2">
+          <div className="text-[10px] text-white/50 uppercase tracking-[0.2em] font-bold pt-2 flex items-center gap-2 flex-wrap">
             真磨皮 / 瘦脸 / 大眼
-            {cam.faceFxLoading && <span className="text-amber-300 normal-case tracking-normal">· 加载模型中...</span>}
+            {cam.faceFxLoading && (
+              <span className="text-amber-300 normal-case tracking-normal">
+                · 下载美颜模型 {cam.faceFxProgress || 0}% · 14MB · 首次需要 5-15 秒
+              </span>
+            )}
             {!cam.faceFxReady && !cam.faceFxLoading && <span className="text-amber-300 normal-case tracking-normal">· 模型未就绪</span>}
             {cam.faceFxReady && !cam.faceFxLoading && <span className="text-emerald-400 normal-case tracking-normal">· MediaPipe ✓</span>}
           </div>
+          {cam.faceFxLoading && (
+            <div className="h-1 bg-stone-800 overflow-hidden" style={{borderRadius:'1px'}}>
+              <div className="h-full bg-amber-300 transition-all duration-300 ease-out"
+                style={{width: `${cam.faceFxProgress || 0}%`}} />
+            </div>
+          )}
           <div className="space-y-2.5">
             <Slider label="真磨皮" value={cam.skinSmooth} onChange={cam.setSkinSmooth}
               hint="检测人脸 · 仅在皮肤区域柔焦，眼睛头发保留清晰" />
