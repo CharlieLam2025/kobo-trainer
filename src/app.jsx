@@ -6225,7 +6225,7 @@ const WeeklyRecapModal = ({ onClose, files }) => {
   );
 };
 
-const HomeView = ({ onSelect, onOpenSettings }) => {
+const HomeView = ({ onSelect, onOpenSettings, onQuickStart }) => {
   const cards = [
     { id: 'improv',       no: '01', icon: 'dice',     cn: '即兴练习',     tag: '抛话题 · 倒计时', desc: '随机抽题 · 倒计时压力下逼出无稿即兴的能力。',           stat: '3', stat_caption: '推荐每日量' },
     { id: 'teleprompter', no: '02', icon: 'document', cn: '爆款文案复刻', tag: '粘贴 · 提词器',   desc: '粘贴爆款文案 / freestyle 关键词，练节奏、语气、镜头感。',  stat: '∞', stat_caption: '任意字数' },
@@ -6441,31 +6441,31 @@ const HomeView = ({ onSelect, onOpenSettings }) => {
       {/* ╭─────────────────────────────╮  */}
       {/* │   HERO  ·  今日推荐         │  */}
       {/* ╰─────────────────────────────╯  */}
-      <button onClick={() => onSelect('improv')}
+      <button onClick={onQuickStart || (() => onSelect('improv'))}
         className="relative w-full overflow-hidden mb-6 text-left bg-[#A30236] text-white p-5 hover:bg-[#8E0230] active:bg-[#700024] transition-colors block group"
         style={{borderRadius:'4px'}}>
         {/* decorative giant numeral */}
         <div className="absolute font-display font-bold pointer-events-none select-none"
              style={{fontSize:'200px', lineHeight:0.85, color:'rgba(255,255,255,0.07)', right:'-12px', bottom:'-28px', letterSpacing:'-0.06em'}}>
-          60s
+          30s
         </div>
         {/* corner mark */}
         <div className="absolute top-3 right-3 flex items-center gap-1.5 text-[9px] tracking-[0.18em] font-bold text-white/70 uppercase">
           <span className="w-1.5 h-1.5 bg-[#F1A23F]" style={{borderRadius:'1px'}} />
-          REC · 推荐
+          REC · 一键开练
         </div>
         <div className="relative">
           <div className="flex items-center gap-2 mb-3">
             <Icon name="sparkle" size={14} className="text-[#F1A23F]" strokeWidth={1.5} />
-            <span className="text-[10px] tracking-[0.2em] font-bold uppercase">今日推荐 · 60 秒钩动</span>
+            <span className="text-[10px] tracking-[0.2em] font-bold uppercase">今日速记 · 30 秒一条</span>
           </div>
           <h2 className="font-display font-bold leading-tight m-0 mb-1.5" style={{fontSize:'24px'}}>
-            挑一个反常识话题<br/>对镜头讲 60 秒
+            一题一录 · 30 秒<br/>不预设 · 不刷题
           </h2>
-          <p className="text-white/80 text-[12px] m-0 mb-4 leading-relaxed">先在这里 freestyle · 想清楚了再正式发</p>
+          <p className="text-white/80 text-[12px] m-0 mb-4 leading-relaxed">从 1300+ 题里抽一道 · 开口、计时、收工</p>
           <div className="inline-flex items-center gap-2 bg-white text-[#A30236] px-4 py-2 font-medium text-[13px] group-hover:bg-stone-100"
                style={{borderRadius:'3px'}}>
-            <Icon name="play" size={14} strokeWidth={1.8} /> 开始预演
+            <Icon name="play" size={14} strokeWidth={1.8} /> 立即开练 · 30s
           </div>
         </div>
       </button>
@@ -6866,12 +6866,14 @@ const getAllTopicsPool = () => {
   return [].concat(...pools);
 };
 
-const ImprovMode = () => {
+const ImprovMode = ({ intent, clearIntent }) => {
   const [stage, setStage] = useState('config');
   const [duration, setDuration] = useState(60);
   const [customDuration, setCustomDuration] = useState(90);
   const [useCustom, setUseCustom] = useState(false);
   const [source, setSource] = useState(ALL_SOURCE);   // 默认从全部 1300+ 题里抽
+  // 从首页 HERO 一键进来 → 进入「速记模式」：渲染极简 QuickStartView 而不是 3 屏 config
+  const [quickMode, setQuickMode] = useState(false);
   const [topic, setTopic] = useState('');
   const [preCount, setPreCount] = useState(3);
   const [timeLeft, setTimeLeft] = useState(0);
@@ -6920,6 +6922,19 @@ const ImprovMode = () => {
     drawTopic();
   /* eslint-disable-next-line */
   }, [source]);
+
+  // 接住「速记」意图：30 秒 + 全题库随机 + 不显示完整 config UI
+  // 不在 useEffect 里调 cam.start() · 那会丢失 iOS 的 user-gesture 链
+  // 用户在 QuickStartView 里点「立即开练」时 begin() 才被触发 · gesture 链完整
+  useEffect(() => {
+    if (intent === 'quick30') {
+      setDuration(30);
+      setUseCustom(false);
+      setSource(ALL_SOURCE);
+      setQuickMode(true);
+      clearIntent && clearIntent();
+    }
+  }, [intent, clearIntent]);
 
   const generateAI = async () => {
     if (!aiTheme.trim()) return;
@@ -6975,6 +6990,46 @@ const ImprovMode = () => {
     setStage('config');
     setTimeout(begin, 50);
   };
+
+  // 「速记」模式 · 跳过 3 屏 config 直接给一张「题目 + 立即开练」卡
+  if (stage === 'config' && quickMode) {
+    return (
+      <div className="fade-in py-4">
+        <div className="eyebrow eyebrow--crimson mb-2" style={{fontSize:'10px'}}>30 秒速记 · 从首页一键进入</div>
+        <h1 className="font-display font-bold text-stone-900 m-0 mb-1 leading-[1.1] tracking-tight" style={{fontSize:'22px'}}>
+          {topic ? '抽到这一题' : '抽题中...'}
+        </h1>
+        <p className="text-[11px] text-stone-500 mb-5 leading-tight">从 1300+ 题随机 · 不喜欢可换</p>
+
+        <div className="border-l-[3px] border-[#A30236] bg-white border-y border-r border-stone-200 p-5 mb-5 relative">
+          <div className="absolute top-3 right-3 w-7 h-7 bg-[#FBEFF2] text-[#A30236] flex items-center justify-center" style={{borderRadius:'3px'}}>
+            <Icon name="target" size={14} strokeWidth={1.7}/>
+          </div>
+          <div className="text-[10px] text-[#A30236] mb-2 font-medium tracking-[0.12em] uppercase">
+            全部混合 · {totalAllTopics}+ 题
+          </div>
+          <div className="font-display font-bold text-stone-900 leading-snug text-[20px] mt-1 pr-8">
+            {topic || '...'}
+          </div>
+        </div>
+
+        <Btn variant="primary" size="lg" onClick={begin} disabled={!topic} className="w-full mb-3">
+          <Icon name="rec" size={16} strokeWidth={1.8}/> 立即开练 · 30 秒
+        </Btn>
+
+        {cam.error && <div className="text-red-600 text-xs mb-3 text-center">{cam.error}</div>}
+
+        <div className="flex items-center justify-between text-[12px] mt-4 pt-4 border-t border-stone-200">
+          <button onClick={drawTopic} className="text-stone-600 hover:text-[#A30236] flex items-center gap-1.5 transition-colors">
+            <Icon name="refresh" size={12} strokeWidth={1.8}/> 换一题
+          </button>
+          <button onClick={() => setQuickMode(false)} className="text-stone-400 hover:text-stone-700 transition-colors">
+            完整配置 →
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   if (stage === 'ready') return <ReadyOverlay countdown={preCount} videoRef={cam.videoRef} voiceOnly={cam.voiceOnly} hint={topic} />;
 
@@ -9788,6 +9843,13 @@ const UpdateBanner = () => {
 
 function App() {
   const [mode, setMode] = useState('home');
+  // 从首页 HERO 按钮进 ImprovMode 时传一个「快速速记」意图 · 让 ImprovMode 跳过 3 屏 config
+  const [improvIntent, setImprovIntent] = useState(null);
+  const quickStartImprov = useCallback(() => {
+    setImprovIntent('quick30');
+    setMode('improv');
+  }, []);
+  const clearImprovIntent = useCallback(() => setImprovIntent(null), []);
   const [settingsOpen, setSettingsOpen] = useState(false);
   // 首次打开 / 用户重看 → 显示引导
   const [showOnboarding, setShowOnboarding] = useState(() => {
@@ -10012,7 +10074,7 @@ function App() {
       <main style={{flex:1, overflowY:'auto', overflowX:'hidden', minHeight:0}}>
         <div className="px-5 py-5">
           {mode === 'home' ? (
-            <HomeView onSelect={setMode} onOpenSettings={() => setSettingsOpen(true)} />
+            <HomeView onSelect={setMode} onOpenSettings={() => setSettingsOpen(true)} onQuickStart={quickStartImprov} />
           ) : (
             <>
               {(() => {
@@ -10024,7 +10086,7 @@ function App() {
                 };
                 return <PageHeader no={it.no} iconName={it.icon} title={titles[mode] || it.cn} desc={it.sub} />;
               })()}
-              {mode === 'improv'       && <ImprovMode key="improv" />}
+              {mode === 'improv'       && <ImprovMode key="improv" intent={improvIntent} clearIntent={clearImprovIntent} />}
               {mode === 'endless'      && <EndlessMode key="endless" />}
               {mode === 'teleprompter' && <TeleprompterMode key="tele" />}
               {mode === 'host'         && <HostMode key="host" />}
