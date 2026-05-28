@@ -1,17 +1,17 @@
 // 口播练习器 service worker
 // v3: 不再依赖任何外部 CDN · 所有首屏资源同源 · 第一次访问也能离线
 // 策略：app shell + vendor + bundle 都走 cache-first；其它走 network-first
-const CACHE = 'kobo-trainer-v3';
+const CACHE = 'kobo-trainer-v4';
 const APP_SHELL = [
   './',
   './index.html',
   './manifest.webmanifest',
-  // 本地化的关键运行时（替代 jsdelivr / unpkg / cdn.tailwindcss.com）
-  './vendor/tailwind.min.js',
+  // 本地化的关键运行时（替代 jsdelivr / unpkg）
   './vendor/react.production.min.js',
   './vendor/react-dom.production.min.js',
-  // 预编译产物（替代浏览器内 Babel transpile）
+  // 预编译产物：JS 走 esbuild · CSS 走 Tailwind CLI（仅含实际用到的 class）
   './bundle.js',
+  './styles.css',
   // 字体
   './fonts/YandexSansDisplay-Bold.woff2',
   './fonts/YandexSansDisplay-Regular.woff2',

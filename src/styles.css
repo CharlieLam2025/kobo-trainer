@@ -1,0 +1,7 @@
+/* 口播练习器 · CSS 入口
+ * 由 Tailwind CLI 扫描 src/app.jsx + index.html 实际用到的 class
+ * 编译产物：styles.css（部署时引用）
+ */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;

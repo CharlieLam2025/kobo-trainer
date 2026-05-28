@@ -23,70 +23,10 @@
 <link rel="apple-touch-startup-image" media="(device-width: 375px) and (device-height: 812px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)" href="ios-splash/iphone-xs.png">
 <link rel="apple-touch-startup-image" media="(device-width: 414px) and (device-height: 896px) and (-webkit-device-pixel-ratio: 2) and (orientation: portrait)" href="ios-splash/iphone-xr.png">
 <link rel="apple-touch-startup-image" media="(device-width: 375px) and (device-height: 667px) and (-webkit-device-pixel-ratio: 2) and (orientation: portrait)" href="ios-splash/iphone-8.png">
-<!-- Tailwind v3 JIT · 本地化（vendor/）· 同源加载 · 不再依赖任何外部 CDN -->
-<script src="vendor/tailwind.min.js"></script>
-<script>
-  /* RANEPA palette remapped onto Tailwind's amber/stone scales so the entire
-     existing component tree picks it up automatically. */
-  tailwind.config = {
-    theme: {
-      extend: {
-        colors: {
-          /* amber slot becomes the crimson brand family */
-          amber: {
-            50:  '#FBEFF2',
-            100: '#F7DCE4',
-            200: '#EEA5B4',
-            300: '#FFFFFF',   /* "amber-300 on dark" reads as white */
-            400: '#A30236',
-            500: '#8E0230',
-            600: '#700024',
-            700: '#A30236',
-            800: '#700024',
-            900: '#52001A',
-          },
-          /* stone slot becomes the RANEPA grey ramp */
-          stone: {
-            50:  '#FAFAF9',
-            100: '#F4F4F2',
-            200: '#E6E6E6',
-            300: '#D5D5D2',
-            400: '#999999',
-            500: '#6D6D6D',
-            600: '#48494A',
-            700: '#404040',
-            800: '#323232',
-            900: '#262626',
-            950: '#0F0F0F',
-          },
-          /* misc accent slots — kept restrained */
-          rose:    { 100:'#FBEFF2', 200:'#F4D4DD', 700:'#A30236' },
-          orange:  { 50:'#FFF6EC', 100:'#FCE6CC', 200:'#F1A23F', 400:'#EB5E3F' },
-          violet:  { 100:'#E9EBF5', 200:'#C5CBE6', 900:'#061A6C' },
-          emerald: { 50:'#EEF6F0', 100:'#D6E9D9', 200:'#B6D8BC', 600:'#2F6B3D', 700:'#264F30', 900:'#1B3522' },
-          sky:     { 100:'#E9EBF5', 200:'#C5CBE6' },
-          red:     { 50:'#FBEFF2', 100:'#F7DCE4', 200:'#EEA5B4', 400:'#BE003E', 600:'#A30236', 700:'#8E0230' },
-          navy:    { DEFAULT:'#061A6C', alt:'#001A71', pale:'#E9EBF5' },
-        },
-        fontFamily: {
-          display: ['"Yandex Sans Display"','"Yandex Sans Text"','"PingFang SC"','"Microsoft YaHei"','system-ui','sans-serif'],
-          body:    ['"Yandex Sans Text"','"PingFang SC"','"Microsoft YaHei"','system-ui','sans-serif'],
-        },
-        borderRadius: {
-          /* RANEPA prefers near-square; clamp every "rounded-*" token */
-          none: '0', sm:'2px', DEFAULT:'3px', md:'3px', lg:'4px', xl:'4px',
-          '2xl':'6px', '3xl':'6px', full:'9999px',
-        },
-        boxShadow: {
-          sm:  '0 1px 2px rgba(38,38,38,0.06)',
-          DEFAULT: '0 1px 2px rgba(38,38,38,0.06), 0 4px 16px rgba(38,38,38,0.05)',
-          md:  '0 4px 16px rgba(38,38,38,0.06)',
-          lg:  '0 8px 32px rgba(38,38,38,0.10)',
-        },
-      }
-    }
-  };
-</script>
+<!-- Tailwind 真编译产物：CLI 扫描 src/app.jsx 实际用到的 class，只生成必需 -->
+<!-- 体积对比：vendor/tailwind.min.js (404KB) → styles.css (33KB) · gzip 120KB → 6.5KB -->
+<!-- 主题配置已搬到 tailwind.config.js · 修改主题后跑 npm run build 重新生成 -->
+<link rel="stylesheet" href="styles.css">
 <!-- Sentry · 错误上报（DSN 留空 → 不加载 SDK · 不联网 · 零阻塞）-->
 <script>
   // 把你的 Sentry DSN 填这里（在 sentry.io 免费注册后拿到）· 留空则完全不加载 SDK
@@ -324,9 +264,12 @@
     if (status) status.innerHTML = '⚠️ 加载超时 · 某个本地资源没读到<br/><br/>试试：清空浏览器缓存 / 强制刷新（Ctrl+Shift+R）<br/>如果是 PWA 已安装版本：卸载重装可拉到最新 sw.js';
     if (diag) {
       diag.style.display = 'block';
+      var cssLoaded = Array.prototype.some.call(document.styleSheets || [], function(s){
+        return (s.href || '').indexOf('styles.css') !== -1;
+      });
       diag.textContent = '诊断（' + Math.round((Date.now() - window.__koboBootStart) / 1000) + 's）\n' +
         '─────────────\n' +
-        'Tailwind  : ' + (window.tailwind ? '✓' : '✗ vendor/tailwind.min.js') + '\n' +
+        'CSS       : ' + (cssLoaded ? '✓' : '✗ styles.css') + '\n' +
         'React     : ' + (window.React ? '✓' : '✗ vendor/react.production.min.js') + '\n' +
         'ReactDOM  : ' + (window.ReactDOM ? '✓' : '✗ vendor/react-dom.production.min.js') + '\n' +
         'App Bundle: ' + (window.__KOBO_BOOTED ? '✓' : '✗ bundle.js') + '\n' +

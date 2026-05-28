@@ -1,37 +1,60 @@
-// 口播练习器 · esbuild build script
-// 把 src/app.jsx (11400+ 行 JSX) 预编译成 bundle.js
-// 这样浏览器不再需要下载 Babel Standalone + runtime transpile
+// 口播练习器 · 构建脚本
+// 并行产出两个产物：
+//   bundle.js  — esbuild 预编译 src/app.jsx（11400 行 JSX → IIFE）
+//   styles.css — Tailwind v3 CLI 扫描实际用到的 class，仅生成必需的 CSS
 import * as esbuild from 'esbuild';
-import { readFileSync, statSync } from 'node:fs';
+import { execSync, spawn } from 'node:child_process';
+import { statSync } from 'node:fs';
 
 const watch = process.argv.includes('--watch');
 
 /** @type {import('esbuild').BuildOptions} */
-const opts = {
+const jsOpts = {
   entryPoints: ['src/app.jsx'],
   outfile: 'bundle.js',
   bundle: true,
   format: 'iife',
-  target: 'es2018',           // 覆盖 iOS Safari 12+ / Android Chrome 70+
+  target: 'es2018',
   loader: { '.jsx': 'jsx' },
-  jsx: 'transform',           // 经典 React.createElement，匹配 UMD 全局 React
+  jsx: 'transform',
   jsxFactory: 'React.createElement',
   jsxFragment: 'React.Fragment',
   minify: true,
-  sourcemap: false,           // GitHub Pages 部署，source map 会泄露源码体积
+  sourcemap: false,
   legalComments: 'none',
   logLevel: 'info',
-  // src/app.jsx 把 React / ReactDOM 当全局用，esbuild 不会去解析它们
-  // bundle 出来的 IIFE 自然引用 window.React / window.ReactDOM
 };
 
+// Tailwind CLI 在 Windows 下是 .cmd；用 npx 统一两端
+const tailwindCmd = (watchMode) =>
+  `npx tailwindcss -i src/styles.css -o styles.css --minify${watchMode ? ' --watch' : ''}`;
+
+const t0 = Date.now();
 if (watch) {
-  const ctx = await esbuild.context(opts);
+  // watch 模式：esbuild + tailwind 各自起一个常驻进程
+  const ctx = await esbuild.context(jsOpts);
   await ctx.watch();
-  console.log('[esbuild] watching src/app.jsx → bundle.js ...');
+  console.log('[build] watching src/app.jsx → bundle.js ...');
+  // tailwind --watch 是子进程，stdout 透传
+  spawn(tailwindCmd(true), { stdio: 'inherit', shell: true });
 } else {
-  const t0 = Date.now();
-  await esbuild.build(opts);
-  const size = statSync('bundle.js').size;
-  console.log(`[esbuild] bundle.js · ${(size / 1024).toFixed(1)} KB · ${Date.now() - t0} ms`);
+  // 一次性构建：并行跑 JS + CSS
+  await Promise.all([
+    esbuild.build(jsOpts),
+    new Promise((resolve, reject) => {
+      try {
+        execSync(tailwindCmd(false), { stdio: 'inherit', shell: true });
+        resolve();
+      } catch (e) {
+        reject(e);
+      }
+    }),
+  ]);
+  const jsSize  = statSync('bundle.js').size;
+  const cssSize = statSync('styles.css').size;
+  console.log(
+    `[build] bundle.js ${(jsSize / 1024).toFixed(1)} KB · ` +
+    `styles.css ${(cssSize / 1024).toFixed(1)} KB · ` +
+    `${Date.now() - t0} ms`
+  );
 }
