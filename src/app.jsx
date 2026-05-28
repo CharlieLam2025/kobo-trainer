@@ -7266,7 +7266,7 @@ const HomeView = ({ onSelect, onOpenSettings, onQuickStart, onStartWithTopic }) 
       <div className="mb-3 flex items-end justify-between">
         <div className="flex items-center gap-2">
           <span className="w-1 h-4 bg-[#A30236] inline-block" />
-          <h2 className="font-display font-bold text-stone-900 text-[14px] m-0">五种预演模式</h2>
+          <h2 className="font-display font-bold text-stone-900 text-[14px] m-0">{cards.length} 种预演模式</h2>
         </div>
         <span className="text-stone-400 text-[10px] flex items-center gap-1">点击进入 <Icon name="chevron" size={10}/></span>
       </div>
@@ -10211,7 +10211,7 @@ const SettingsPanel = ({ onClose }) => {
             style={{borderRadius:'3px'}}>
             🎬 重看新手引导
           </button>
-          <div className="text-[10px] text-stone-400 mt-1">4 屏 · 介绍这是个练习器、5 种预演模式、打卡机制、AI 反馈链路。</div>
+          <div className="text-[10px] text-stone-400 mt-1">1 屏 · 核心哲学 + 三步循环 + 隐私承诺。</div>
         </div>
 
         <div className="flex justify-end gap-2 pt-2">
