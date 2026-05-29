@@ -6325,6 +6325,61 @@ const groupByDay = (files) => {
   files.forEach(f => { const k = dayKey(f.ts); m[k] = (m[k]||0) + 1; });
   return m;
 };
+
+// ============ 成长阶段（Growth Stage）============
+// 第一性原理：用户的终态是「敢于面对镜头、敢于输出、敢于表达的人」。
+// 这不是一蹴而就 · 是一条曲线。Stage 系统给这条曲线一个可见的形状 ——
+// 让用户每次打开都知道「我在哪、下一步去哪、还差什么」。
+//
+// 口径刻意「最鼓励」：
+//   - count 用全部录像数（不卡时长）· 录了 10 秒也是「开口了」· 不打击刚起步的人
+//   - maxStreak 用「任何录像天」的最长连续（不要求达成每日 goal）· 成长不是考核
+// 这跟首页打卡的 streak（要求达标）是两套口径 · 各司其职。
+const GROWTH_STAGES = [
+  { name:'未启程',   emoji:'·',  gate:{count:0,   streak:0},  desc:'录下第一条 · 旅程就开始了' },
+  { name:'破冰者',   emoji:'🎬', gate:{count:1,   streak:0},  desc:'你已经敢开口了 · 这一步最难' },
+  { name:'开口者',   emoji:'💬', gate:{count:5,   streak:0},  desc:'开口正在变得不需要勇气' },
+  { name:'习惯萌芽', emoji:'🌱', gate:{count:7,   streak:3},  desc:'训练正在变成你的本能' },
+  { name:'稳定训练', emoji:'💪', gate:{count:20,  streak:7},  desc:'你有了自己的节奏' },
+  { name:'表达者',   emoji:'⭐', gate:{count:50,  streak:14}, desc:'镜头前的你 · 松弛下来了' },
+  { name:'创作者',   emoji:'👑', gate:{count:100, streak:14}, desc:'表达已经是你的一部分' },
+];
+
+// 历史最长连续天数（任何录像天 · 不要求达标）
+const computeMaxStreak = (files) => {
+  const days = [...new Set((files || []).map(f => Math.floor(startOfDay(f.ts || 0) / 86400000)))]
+    .filter(d => d > 0)  // 过滤缺失 ts 的脏数据（聚到 day 0）
+    .sort((a, b) => a - b);
+  if (days.length === 0) return 0;
+  let max = 1, cur = 1;
+  for (let i = 1; i < days.length; i++) {
+    if (days[i] === days[i - 1] + 1) { cur++; if (cur > max) max = cur; }
+    else cur = 1;
+  }
+  return max;
+};
+
+// 纯函数：(总录像数, 最长连续天) → { level, current, next, progress, need }
+const computeGrowthStage = (totalCount, maxStreak) => {
+  let level = 0;
+  for (let i = 0; i < GROWTH_STAGES.length; i++) {
+    const g = GROWTH_STAGES[i].gate;
+    if (totalCount >= g.count && maxStreak >= g.streak) level = i;
+    else break;
+  }
+  const current = GROWTH_STAGES[level];
+  const next = GROWTH_STAGES[level + 1] || null;
+  if (!next) return { level, current, next: null, progress: 1, need: null };
+  const g = next.gate;
+  const countProg  = g.count  > 0 ? Math.min(1, totalCount / g.count)  : 1;
+  const streakProg = g.streak > 0 ? Math.min(1, maxStreak / g.streak) : 1;
+  const progress = Math.min(countProg, streakProg);
+  // 「还差什么」选完成度最低的那个维度（更接近的先不催）
+  const need = countProg <= streakProg
+    ? { type: 'count',  remaining: Math.max(0, g.count  - totalCount) }
+    : { type: 'streak', remaining: Math.max(0, g.streak - maxStreak) };
+  return { level, current, next, progress, need };
+};
 // 前 7 天每天都有一句具体的话 · 不是空泛鸡汤 · 引用习惯科学的具体说法
 // 设计原则：每个 day 的措辞针对当天最容易死的心理（无聊 / 自我怀疑 / 失去新鲜感）
 // 触发条件：streak 在 1-7 范围 + 今天第一条达标录像
@@ -6716,6 +6771,12 @@ const HomeView = ({ onSelect, onOpenSettings, onQuickStart, onStartWithTopic }) 
     };
   }, [settings.savedFiles, settings.dailyGoal, settings.restDays]);
 
+  // 成长阶段（最鼓励口径：全部录像数 + 任何录像天的最长连续）
+  const growth = useMemo(() => {
+    const files = settings.savedFiles || [];
+    return computeGrowthStage(files.length, computeMaxStreak(files));
+  }, [settings.savedFiles]);
+
   // 是否有今天的「预订题目」（forDate 必须等于今天 · 否则当过期处理）
   const pendingTopic = tomorrowTopic && tomorrowTopic.forDate === dateKeyToday()
     ? tomorrowTopic.topic
@@ -6774,6 +6835,47 @@ const HomeView = ({ onSelect, onOpenSettings, onQuickStart, onStartWithTopic }) 
           </div>
           <div className="text-stone-500 text-[9px] tracking-[0.16em] uppercase mt-1 font-semibold">今日 take 数</div>
         </div>
+      </div>
+
+      {/* ╭─────────────────────────────╮  */}
+      {/* │   成长阶段进度（身份锚）    │  */}
+      {/* ╰─────────────────────────────╯  */}
+      <div className="mb-5 px-3.5 py-3 bg-white border border-stone-200" style={{borderRadius:'4px'}}>
+        <div className="flex items-center justify-between gap-2 mb-2">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <span className="text-[22px] leading-none shrink-0">{growth.current.emoji}</span>
+            <div className="min-w-0">
+              <div className="font-display font-bold text-stone-900 text-[14px] leading-none">
+                {growth.current.name}
+                <span className="text-stone-400 text-[10px] font-semibold ml-1.5 tracking-wider">Lv.{growth.level}</span>
+              </div>
+              <div className="text-[10px] text-stone-500 mt-1 leading-tight truncate">{growth.current.desc}</div>
+            </div>
+          </div>
+          {growth.next && (
+            <div className="text-right shrink-0 pl-1">
+              <div className="text-[8px] text-stone-400 tracking-[0.16em] uppercase">下一阶段</div>
+              <div className="text-[11px] font-bold text-[#A30236] leading-tight mt-0.5 whitespace-nowrap">
+                {growth.next.emoji} {growth.next.name}
+              </div>
+            </div>
+          )}
+        </div>
+        {growth.next ? (
+          <>
+            <div className="h-1.5 bg-stone-100 overflow-hidden" style={{borderRadius:'1px'}}>
+              <div className="h-full bg-[#A30236] transition-all duration-700"
+                style={{width: `${Math.round(growth.progress * 100)}%`}} />
+            </div>
+            <div className="text-[10px] text-stone-500 mt-1.5 leading-tight">
+              {growth.need.type === 'count'
+                ? `再录 ${growth.need.remaining} 条 · 解锁「${growth.next.name}」`
+                : `再连续练 ${growth.need.remaining} 天 · 解锁「${growth.next.name}」`}
+            </div>
+          </>
+        ) : (
+          <div className="text-[10px] text-emerald-700 font-medium">已抵达最高阶段 · 继续创作就好 🎉</div>
+        )}
       </div>
 
       {/* ╭─────────────────────────────╮  */}
