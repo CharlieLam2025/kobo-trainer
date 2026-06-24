@@ -13,6 +13,7 @@
     "android:apk:release": "node scripts/build-android-release-apk.mjs",
     "verify:video-xhs": "node scripts/verify-video-xhs-experience.mjs",
     "verify:topic-curation": "node scripts/verify-topic-curation.mjs",
+    "verify:ios-safari": "node scripts/verify-ios-safari-compat.mjs",
     "watch": "node build.mjs --watch"
   },
   "devDependencies": {

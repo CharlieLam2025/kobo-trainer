@@ -2426,6 +2426,28 @@ const pickRandom = (arr, exclude) => {
   return pool[Math.floor(Math.random() * pool.length)];
 };
 
+const splitTeleprompterSentences = (value) => {
+  const out = [];
+  let current = '';
+  const push = () => {
+    const sentence = current.trim();
+    if (sentence) out.push(sentence);
+    current = '';
+  };
+
+  for (const ch of String(value || '')) {
+    if (ch === '\r') continue;
+    if (ch === '\n') {
+      push();
+      continue;
+    }
+    current += ch;
+    if ('。！？!?'.includes(ch)) push();
+  }
+  push();
+  return out;
+};
+
 const sanitizeFilename = (s) => (s || 'untitled')
   .replace(/[\\/:*?"<>|\n\r\t]/g, '')
   .replace(/\s+/g, '_')
@@ -7067,10 +7089,7 @@ const TeleprompterMode = () => {
     }
   };
 
-  const sentences = useMemo(() =>
-    text.split(/\n+|(?<=[。！？!?])/).map(s => s.trim()).filter(Boolean),
-    [text]
-  );
+  const sentences = useMemo(() => splitTeleprompterSentences(text), [text]);
   // 每句去掉空白和标点后的纯中文/字母字数，用于计算 ASR 已读到哪一句
   const sentenceCharLens = useMemo(() =>
     sentences.map(s => s.replace(/[\s\p{P}]/gu, '').length),
