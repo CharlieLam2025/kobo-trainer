@@ -14,6 +14,7 @@
     "verify:video-xhs": "node scripts/verify-video-xhs-experience.mjs",
     "verify:topic-curation": "node scripts/verify-topic-curation.mjs",
     "verify:ios-safari": "node scripts/verify-ios-safari-compat.mjs",
+    "verify:service-worker": "node scripts/verify-service-worker-update.mjs",
     "watch": "node build.mjs --watch"
   },
   "devDependencies": {

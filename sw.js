@@ -1,7 +1,8 @@
 // 口播练习器 service worker
 // v5: fallback 按请求类型分流 · 不再把 index.html 喂给 JS / CSS 解析器
 // 策略：app shell + vendor + bundle 都走 cache-first；其它走 network-first
-const CACHE = 'kobo-trainer-v5';
+const CACHE = 'kobo-trainer-v6';
+const NETWORK_FIRST_ASSETS = new Set(['bundle.js', 'styles.css']);
 const APP_SHELL = [
   './',
   './index.html',
@@ -49,6 +50,21 @@ self.addEventListener('fetch', (e) => {
 
   // 同源资源（app shell + vendor + bundle + mediapipe + fonts + icons）: cache-first
   if (url.origin === self.location.origin) {
+    if (e.request.mode === 'navigate' || NETWORK_FIRST_ASSETS.has(url.pathname.split('/').pop())) {
+      e.respondWith(
+        fetch(e.request).then(r => {
+          if (r.ok && r.type === 'basic') {
+            const clone = r.clone();
+            caches.open(CACHE).then(c => c.put(e.request, clone));
+          }
+          return r;
+        }).catch(() =>
+          caches.match(e.request).then(cached => cached || caches.match('./index.html'))
+        )
+      );
+      return;
+    }
+
     e.respondWith(
       caches.match(e.request).then(cached => cached || fetch(e.request).then(r => {
         if (r.ok && r.type === 'basic') {
