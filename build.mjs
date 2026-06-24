@@ -38,18 +38,9 @@ if (watch) {
   // tailwind --watch 是子进程，stdout 透传
   spawn(tailwindCmd(true), { stdio: 'inherit', shell: true });
 } else {
-  // 一次性构建：并行跑 JS + CSS
-  await Promise.all([
-    esbuild.build(jsOpts),
-    new Promise((resolve, reject) => {
-      try {
-        execSync(tailwindCmd(false), { stdio: 'inherit', shell: true });
-        resolve();
-      } catch (e) {
-        reject(e);
-      }
-    }),
-  ]);
+  // 一次性构建：顺序跑 JS + CSS，降低 Windows + Gradle daemon 场景下的内存峰值。
+  await esbuild.build(jsOpts);
+  execSync(tailwindCmd(false), { stdio: 'inherit', shell: true });
   const jsSize  = statSync('bundle.js').size;
   const cssSize = statSync('styles.css').size;
   console.log(

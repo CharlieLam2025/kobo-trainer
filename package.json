@@ -5,12 +5,28 @@
   "description": "口播练习器 · build pipeline (esbuild)",
   "scripts": {
     "build": "node build.mjs",
+    "build:web": "node build.mjs",
+    "prepare:android-web": "node scripts/prepare-android-web.mjs",
+    "build:android-web": "node scripts/build-android-web.mjs",
+    "android:sync": "node scripts/sync-android.mjs",
+    "android:apk": "node scripts/build-android-apk.mjs",
+    "android:apk:release": "node scripts/build-android-release-apk.mjs",
+    "verify:video-xhs": "node scripts/verify-video-xhs-experience.mjs",
+    "verify:topic-curation": "node scripts/verify-topic-curation.mjs",
     "watch": "node build.mjs --watch"
   },
   "devDependencies": {
+    "@capacitor/cli": "^8.4.1",
     "autoprefixer": "^10.5.0",
     "esbuild": "^0.24.0",
     "postcss": "^8.5.15",
     "tailwindcss": "^3.4.17"
+  },
+  "dependencies": {
+    "@capacitor-community/speech-recognition": "^7.0.1",
+    "@capacitor/android": "^8.4.1",
+    "@capacitor/core": "^8.4.1",
+    "@capacitor/filesystem": "^8.1.2",
+    "@capacitor/local-notifications": "^8.2.0"
   }
 }

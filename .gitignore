@@ -16,5 +16,15 @@ Thumbs.db
 # Node (if anyone adds tooling later)
 node_modules/
 
+# Local tooling
+.claude/
+
+# Generated app artifacts
+output/
+www/
+android/.gradle/
+android/**/build/
+*.apk
+
 # 备份的旧版本
 *.html.bak

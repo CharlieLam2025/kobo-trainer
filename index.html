@@ -300,7 +300,8 @@
 <script>
   // PWA: 注册 service worker · 带「新版本就绪」提醒机制
   // sw.js install 时 skipWaiting + activate 时 claim · 所以新 SW 接管页面就是「有更新」
-  if ('serviceWorker' in navigator) {
+  var isNativeShell = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
+  if (!isNativeShell && 'serviceWorker' in navigator) {
     window.addEventListener('load', function() {
       // 页面加载时如果已有 controller = 老用户（之前装过 SW）· 之后的 controllerchange 才是「更新」
       var hadControllerOnLoad = !!navigator.serviceWorker.controller;
