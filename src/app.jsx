@@ -2,6 +2,12 @@ import { Capacitor } from '@capacitor/core';
 import { Filesystem, Directory } from '@capacitor/filesystem';
 import { LocalNotifications } from '@capacitor/local-notifications';
 import { SpeechRecognition } from '@capacitor-community/speech-recognition';
+import {
+  EMPTY_TOPIC_PREFERENCES,
+  buildAdaptiveTopicPool,
+  normalizeTopicPreferences,
+  updateTopicPreference,
+} from './topic-preferences.mjs';
 
 // 启动信号：bundle.js 一旦被浏览器执行就立刻置 true
 // （boot 诊断用这个区分「bundle 没下载到」vs「下载了但渲染挂掉」）
@@ -2766,6 +2772,33 @@ function wpmBand(wpm) {
   return { label:'舒适', color:'#10b981' };
 }
 
+function buildNextTakeFocus(transcript, durationSec = 0) {
+  const text = String(transcript || '').trim();
+  if (durationSec > 0 && durationSec < 20) {
+    return '下一遍先讲满 30 秒：一句观点、一个例子、一句结论。';
+  }
+  if (text.length < 15) {
+    return '下一遍只守住三句话：先给结论，再讲原因，最后留一句收尾。';
+  }
+
+  const fillers = analyzeFillerWords(text);
+  const filler = fillers[0];
+  const fillerTotal = fillers.reduce((sum, item) => sum + item.count, 0);
+  if (filler && fillerTotal >= 3) {
+    return `下一遍只盯住少说“${filler.word}”，想接话时停半秒。`;
+  }
+
+  const wpm = calculateWPM(text, durationSec);
+  if (wpm > 320) return '下一遍整体放慢 10%，每讲完一个观点停半秒。';
+  if (wpm > 0 && wpm < 180) return '下一遍把语速提一点，第一句直接说结论，不做铺垫。';
+
+  const firstSentence = text.split(/[。！？!?\n]/)[0].trim();
+  if (firstSentence.length > 24) {
+    return '下一遍把第一句压到 15 个字左右，先抛冲突或明确结论。';
+  }
+  return '下一遍保留主体，只把开头换成一个更明确的冲突或结论。';
+}
+
 // DeepSeek 教练复盘：基于转录稿给 5 维评分 + 改进建议
 async function deepseekCoachReview({ apiKey, topic, transcript, durationSec, wpm, fillerTop }) {
   const sys = '你是一位资深口播教练，帮自媒体创作者复盘短视频口播稿。冷静、具体、动作化反馈，不要客套、不要鸡汤。';
@@ -2898,6 +2931,8 @@ const SettingsContext = React.createContext({
   reminderEnabled: false, setReminderEnabled: () => {},
   reminderTime: '19:00', setReminderTime: () => {},
   routineAnchor: '', setRoutineAnchor: () => {},
+  topicPreferences: EMPTY_TOPIC_PREFERENCES,
+  changeTopicPreference: () => {}, clearTopicPreferences: () => {},
 });
 const useSettings = () => React.useContext(SettingsContext);
 
@@ -3730,7 +3765,11 @@ const PracticeStageOverlay = ({ topic, modeLabel, elapsed, duration, status, onS
       </div>
     </div>
     {status === 'recording' && (
-      <div className="absolute bottom-4 left-1/2 -translate-x-1/2 pointer-events-auto">
+      <div
+        data-testid="recording-stop"
+        className="absolute left-1/2 -translate-x-1/2 pointer-events-auto z-10"
+        style={{bottom:'calc(env(safe-area-inset-bottom, 0px) + 72px)'}}
+      >
         <button onClick={onStop}
           className="bg-[#A30236] text-white px-5 py-3 font-bold flex items-center gap-2 shadow-lg"
           style={{borderRadius:'999px'}}>
@@ -4087,10 +4126,10 @@ const SameTopicCompare = ({ topic, currentTranscript, currentDuration }) => {
   const { savedFiles } = useSettings();
   const prior = useMemo(() => {
     if (!topic) return null;
-    // savedFiles[0] 是刚保存的本次。从 [1:] 里找同 label 且有像样转录稿的最近一条
+    // savedFiles[0] 是刚保存的本次。从 [1:] 里找最近一次同题练习。
     return (savedFiles || [])
       .slice(1)
-      .find(f => f.label === topic && (f.transcript || '').trim().length > 10);
+      .find(f => f.label === topic);
   }, [savedFiles, topic]);
 
   if (!prior) return null;
@@ -4102,6 +4141,9 @@ const SameTopicCompare = ({ topic, currentTranscript, currentDuration }) => {
   const currWpm     = calculateWPM(currentTranscript, currentDuration);
   const currFillers = analyzeFillerWords(currentTranscript || '');
   const currFillerTotal = currFillers.reduce((s, f) => s + f.count, 0);
+  const hasTextCompare = (prior.transcript || '').trim().length > 10
+    && (currentTranscript || '').trim().length > 10;
+  const takeCount = Math.max(2, (savedFiles || []).filter(f => f.label === topic).length);
 
   const daysAgo = Math.max(1, Math.floor((Date.now() - (prior.ts || 0)) / 86400000));
 
@@ -4126,34 +4168,49 @@ const SameTopicCompare = ({ topic, currentTranscript, currentDuration }) => {
         </div>
       </div>
 
-      <div className="grid grid-cols-3 gap-2 mt-4">
-        <div className="text-center p-3 bg-stone-50" style={{borderRadius:'3px'}}>
-          <div className="text-[9px] tracking-[0.16em] uppercase text-stone-400 font-bold">嗯啊数</div>
-          <div className="font-display font-bold text-[20px] tabular-nums mt-1 text-stone-900">{currFillerTotal}</div>
-          <div className={`text-[10px] mt-1 ${fillerColor}`}>
-            上次 {priorFillerTotal} · {fmtDelta(fillerDelta)}
+      {hasTextCompare ? (
+        <div className="grid grid-cols-3 gap-2 mt-4">
+          <div className="text-center p-3 bg-stone-50" style={{borderRadius:'3px'}}>
+            <div className="text-[9px] tracking-[0.16em] uppercase text-stone-400 font-bold">嗯啊数</div>
+            <div className="font-display font-bold text-[20px] tabular-nums mt-1 text-stone-900">{currFillerTotal}</div>
+            <div className={`text-[10px] mt-1 ${fillerColor}`}>
+              上次 {priorFillerTotal} · {fmtDelta(fillerDelta)}
+            </div>
+          </div>
+          <div className="text-center p-3 bg-stone-50" style={{borderRadius:'3px'}}>
+            <div className="text-[9px] tracking-[0.16em] text-stone-400 font-bold">语速</div>
+            <div className="font-display font-bold text-[20px] tabular-nums mt-1 text-stone-900">{currWpm}</div>
+            <div className="text-[10px] mt-1 text-stone-500">上次 {priorWpm}</div>
+          </div>
+          <div className="text-center p-3 bg-stone-50" style={{borderRadius:'3px'}}>
+            <div className="text-[9px] tracking-[0.16em] uppercase text-stone-400 font-bold">时长</div>
+            <div className="font-display font-bold text-[20px] tabular-nums mt-1 text-stone-900">{currentDuration}s</div>
+            <div className="text-[10px] mt-1 text-stone-500">上次 {prior.duration || 0}s · {fmtDelta(durDelta, 's')}</div>
           </div>
         </div>
-        <div className="text-center p-3 bg-stone-50" style={{borderRadius:'3px'}}>
-          <div className="text-[9px] tracking-[0.16em] text-stone-400 font-bold">语速</div>
-          <div className="font-display font-bold text-[20px] tabular-nums mt-1 text-stone-900">{currWpm}</div>
-          <div className="text-[10px] mt-1 text-stone-500">上次 {priorWpm}</div>
+      ) : (
+        <div className="grid grid-cols-2 gap-2 mt-4">
+          <div className="p-3 bg-[#E9EBF5]" style={{borderRadius:'3px'}}>
+            <div className="text-[9px] tracking-[0.16em] uppercase text-[#061A6C]/60 font-bold">同题次数</div>
+            <div className="font-display font-bold text-[20px] text-[#061A6C] mt-1">第 {takeCount} 遍</div>
+            <div className="text-[10px] text-[#061A6C]/70 mt-1">复练闭环已经形成</div>
+          </div>
+          <div className="p-3 bg-stone-50" style={{borderRadius:'3px'}}>
+            <div className="text-[9px] tracking-[0.16em] uppercase text-stone-400 font-bold">本次时长</div>
+            <div className="font-display font-bold text-[20px] text-stone-900 mt-1">{currentDuration}s</div>
+            <div className="text-[10px] text-stone-500 mt-1">上次 {prior.duration || 0}s · {fmtDelta(durDelta, 's')}</div>
+          </div>
         </div>
-        <div className="text-center p-3 bg-stone-50" style={{borderRadius:'3px'}}>
-          <div className="text-[9px] tracking-[0.16em] uppercase text-stone-400 font-bold">时长</div>
-          <div className="font-display font-bold text-[20px] tabular-nums mt-1 text-stone-900">{currentDuration}s</div>
-          <div className="text-[10px] mt-1 text-stone-500">上次 {prior.duration || 0}s · {fmtDelta(durDelta, 's')}</div>
-        </div>
-      </div>
+      )}
 
-      <details className="mt-4 pt-3 border-t border-stone-200">
+      {(prior.transcript || '').trim() && <details className="mt-4 pt-3 border-t border-stone-200">
         <summary className="text-[11px] text-stone-500 cursor-pointer hover:text-stone-800 select-none">
           📜 看上次怎么讲的（{daysAgo} 天前）
         </summary>
         <div className="text-[12px] text-stone-700 mt-2 leading-relaxed bg-stone-50 p-3" style={{borderRadius:'2px'}}>
           {prior.transcript}
         </div>
-      </details>
+      </details>}
     </Card>
   );
 };
@@ -4266,7 +4323,7 @@ const ReviewScoreGrid = ({ stats, review }) => {
   );
 };
 
-const ReviewHero = ({ contextLabel, duration, onRetry, onNew }) => (
+const ReviewHero = ({ contextLabel, duration, onRetry, onNew, focus }) => (
   <ActionPanel className="p-5 mb-4 border-l-[3px] border-l-[#A30236]">
     <div className="text-[10px] font-bold uppercase text-[#A30236] mb-2 tracking-[0.16em]">复盘报告</div>
     <h1 className="font-display font-bold text-[24px] leading-tight text-stone-950">
@@ -4275,8 +4332,12 @@ const ReviewHero = ({ contextLabel, duration, onRetry, onNew }) => (
     <p className="text-[13px] text-stone-500 mt-2 leading-relaxed">
       {contextLabel || '未命名练习'} · {formatTime(duration || 0)}
     </p>
+    <div className="mt-4 p-3 bg-[#FBEFF2] border border-[#efd0da]" style={{borderRadius:'3px'}}>
+      <div className="text-[9px] tracking-[0.18em] uppercase font-bold text-[#A30236] mb-1">下一遍只改这一件事</div>
+      <div className="text-[13px] font-bold text-stone-900 leading-relaxed">{focus}</div>
+    </div>
     <div className="flex gap-2 mt-4">
-      <Btn variant="primary" onClick={onRetry} className="flex-1">再练一遍</Btn>
+      <Btn variant="primary" onClick={onRetry} className="flex-1"><Icon name="refresh" size={14}/> 同题二刷</Btn>
       <Btn variant="secondary" onClick={onNew}>换个题目</Btn>
     </div>
   </ActionPanel>
@@ -4304,6 +4365,7 @@ const DoneView = ({ blob, contextLabel, duration = 0, onRetry, onNew, extra, tra
   useEffect(() => () => { if (url) URL.revokeObjectURL(url); }, [url]);
 
   const sizeMB = blob ? (blob.size / 1024 / 1024).toFixed(1) : null;
+  const nextTakeFocus = useMemo(() => buildNextTakeFocus(transcript, duration), [transcript, duration]);
 
   // 录完即时反馈：今日进度 + 连续天数 + 是否解锁新成就
   // 注意：savedFiles 包含刚加进去的这一条
@@ -4480,6 +4542,7 @@ const DoneView = ({ blob, contextLabel, duration = 0, onRetry, onNew, extra, tra
         duration={duration}
         onRetry={onRetry}
         onNew={onNew}
+        focus={nextTakeFocus}
       />
 
       <Card className="p-6 mb-4">
@@ -4555,7 +4618,7 @@ const DoneView = ({ blob, contextLabel, duration = 0, onRetry, onNew, extra, tra
       </Card>
 
       {/* 🎯 AI 教练复盘 */}
-      {blob && <CoachReview topic={contextLabel} durationSec={duration} initialTranscript={transcript} />}
+      {blob && <CoachReview topic={contextLabel} durationSec={duration} initialTranscript={transcript} onRetry={onRetry} />}
 
       {/* ↻ 同题对比：今天 vs 上次同题（如果之前练过这题） */}
       {blob && contextLabel && (
@@ -4574,7 +4637,7 @@ const DoneView = ({ blob, contextLabel, duration = 0, onRetry, onNew, extra, tra
 };
 
 // ============ AI 教练复盘：5 维评分 + 改进建议 ============
-const CoachReview = ({ topic, durationSec = 0, initialTranscript = '' }) => {
+const CoachReview = ({ topic, durationSec = 0, initialTranscript = '', onRetry }) => {
   const settings = useSettings();
   const [text, setText]       = useState(initialTranscript || '');
   const [review, setReview]   = useState(null);
@@ -4703,6 +4766,18 @@ const CoachReview = ({ topic, durationSec = 0, initialTranscript = '' }) => {
 
       {review && (
         <>
+          {review.suggestions?.[0] && (
+            <div className="mb-4 p-4 bg-[#FBEFF2] border-l-[3px] border-[#A30236]">
+              <div className="text-[9px] tracking-[0.18em] uppercase font-bold text-[#A30236] mb-1">第二遍唯一任务</div>
+              <div className="text-[14px] font-bold text-stone-900 leading-relaxed">{review.suggestions[0]}</div>
+              {onRetry && (
+                <Btn variant="primary" onClick={onRetry} className="w-full mt-3">
+                  <Icon name="refresh" size={14}/> 按这条同题二刷
+                </Btn>
+              )}
+            </div>
+          )}
+
           <div className="mb-4">
             <ReviewScoreGrid stats={stats} review={review} />
           </div>
@@ -4727,11 +4802,11 @@ const CoachReview = ({ topic, durationSec = 0, initialTranscript = '' }) => {
           )}
 
           {/* 改进建议 */}
-          {review.suggestions?.length > 0 && (
+          {review.suggestions?.length > 1 && (
             <div className="mb-3">
-              <div className="text-[10px] tracking-[0.18em] uppercase text-[#A30236] font-bold mb-1.5">📌 下一条可改进的</div>
+              <div className="text-[10px] tracking-[0.18em] uppercase text-stone-500 font-bold mb-1.5">之后再改</div>
               <ul className="space-y-1.5">
-                {review.suggestions.map((s, i) => (
+                {review.suggestions.slice(1).map((s, i) => (
                   <li key={i} className="text-[13px] text-stone-800 pl-3 border-l border-[#A30236] leading-relaxed">{s}</li>
                 ))}
               </ul>
@@ -6538,6 +6613,7 @@ const DURATIONS = [
 
 const AI_SOURCE  = '__ai__';
 const ALL_SOURCE = '__all__';
+const FAVORITE_SOURCE = '__favorites__';
 
 // 默认精选池：排除明显泛闲聊 / 泛生活 / 脑洞 / 情感八卦类，保留更贴近用户长期议题的题。
 // 被排除的分类仍能手动选择，只是不再进入「精选混合」。
@@ -6580,6 +6656,76 @@ const getAllTopicsPool = () => {
   return [].concat(...pools);
 };
 
+const TOPIC_SOURCE_BY_VALUE = (() => {
+  const index = new Map();
+  Object.entries(TOPIC_TYPES).forEach(([key, value]) => {
+    (value.topics || []).forEach(topic => { if (!index.has(topic)) index.set(topic, key); });
+  });
+  Object.entries(ISSUES).forEach(([key, value]) => {
+    (value.topics || []).forEach(topic => { if (!index.has(topic)) index.set(topic, key); });
+  });
+  return index;
+})();
+
+const findTopicSourceKey = (topic) => TOPIC_SOURCE_BY_VALUE.get(topic) || '';
+
+const pickAdaptiveTopic = (topics, preferences, exclude) => {
+  const pool = buildAdaptiveTopicPool(topics, preferences, findTopicSourceKey);
+  return pickRandom(pool.length ? pool : topics, exclude);
+};
+
+const TopicPreferenceControls = ({ topic, sourceKey, onHide, compact = false }) => {
+  const settings = useSettings();
+  if (!topic) return null;
+  const preferences = normalizeTopicPreferences(settings.topicPreferences);
+  const interested = preferences.interestedTopics.includes(topic);
+  const favorite = preferences.favoriteTopics.includes(topic);
+  const update = (action) => settings.changeTopicPreference?.({
+    topic,
+    sourceKey: sourceKey || findTopicSourceKey(topic),
+    action,
+  });
+
+  const base = compact
+    ? 'min-h-9 px-2 text-[11px]'
+    : 'min-h-10 px-3 text-[12px]';
+
+  return (
+    <div className={`grid grid-cols-3 gap-1.5 ${compact ? 'mt-3' : 'mt-4'}`} aria-label="选题偏好">
+      <button
+        type="button"
+        aria-pressed={interested}
+        onClick={() => update('interested')}
+        className={`${base} border flex items-center justify-center gap-1.5 font-bold transition-colors ${
+          interested ? 'border-emerald-600 bg-emerald-50 text-emerald-800' : 'border-stone-200 bg-white text-stone-600 hover:border-emerald-400'
+        }`}
+        style={{borderRadius:'3px'}}
+      >
+        <Icon name="check" size={13} strokeWidth={2}/>{interested ? '已想聊' : '想聊'}
+      </button>
+      <button
+        type="button"
+        onClick={() => { update('hide'); onHide?.(); }}
+        className={`${base} border border-stone-200 bg-white text-stone-500 hover:border-[#A30236] hover:text-[#A30236] flex items-center justify-center gap-1.5 font-bold transition-colors`}
+        style={{borderRadius:'3px'}}
+      >
+        <Icon name="close" size={12} strokeWidth={2}/>不感兴趣
+      </button>
+      <button
+        type="button"
+        aria-pressed={favorite}
+        onClick={() => update('favorite')}
+        className={`${base} border flex items-center justify-center gap-1.5 font-bold transition-colors ${
+          favorite ? 'border-[#A30236] bg-[#FBEFF2] text-[#A30236]' : 'border-stone-200 bg-white text-stone-600 hover:border-[#A30236]'
+        }`}
+        style={{borderRadius:'3px'}}
+      >
+        <Icon name="heart" size={13} strokeWidth={favorite ? 2.2 : 1.7}/>{favorite ? '已收藏' : '收藏'}
+      </button>
+    </div>
+  );
+};
+
 const ImprovMode = ({ intent, clearIntent }) => {
   const [stage, setStage] = useState('config');
   const [duration, setDuration] = useState(60);
@@ -6610,21 +6756,33 @@ const ImprovMode = ({ intent, clearIntent }) => {
     return result;
   }, []);
 
-  const totalDefaultTopics = useMemo(() => getDefaultTopicsPool().length, []);
+  const topicPreferences = normalizeTopicPreferences(settings.topicPreferences);
+  const favoriteTopics = topicPreferences.favoriteTopics;
+  const totalDefaultTopics = useMemo(() => {
+    const hidden = new Set(topicPreferences.hiddenTopics);
+    return getDefaultTopicsPool().filter(item => !hidden.has(item)).length;
+  }, [settings.topicPreferences]);
+  const topicSourceKey = source === ALL_SOURCE || source === FAVORITE_SOURCE
+    ? findTopicSourceKey(topic)
+    : source === AI_SOURCE ? '' : source;
 
   const drawTopic = useCallback(() => {
     if (source === AI_SOURCE) {
-      if (aiPool.length) setTopic(pickRandom(aiPool, topic));
+      if (aiPool.length) setTopic(pickAdaptiveTopic(aiPool, settings.topicPreferences, topic));
+      return;
+    }
+    if (source === FAVORITE_SOURCE) {
+      if (favoriteTopics.length) setTopic(pickRandom(favoriteTopics, topic));
       return;
     }
     if (source === ALL_SOURCE) {
-      setTopic(pickRandom(getDefaultTopicsPool(), topic));
+      setTopic(pickAdaptiveTopic(getDefaultTopicsPool(), settings.topicPreferences, topic));
       return;
     }
     const src = allSources[source];
     if (!src) return;
-    setTopic(pickRandom(src.topics, topic));
-  }, [source, topic, allSources, aiPool]);
+    setTopic(pickAdaptiveTopic(src.topics, settings.topicPreferences, topic));
+  }, [source, topic, allSources, aiPool, favoriteTopics, settings.topicPreferences]);
 
   useEffect(() => {
     // intent 指定 topic 时跳过本轮自动抽题（避免覆盖 preset topic）
@@ -6633,11 +6791,15 @@ const ImprovMode = ({ intent, clearIntent }) => {
       return;
     }
     if (source === AI_SOURCE) {
-      if (aiPool.length) setTopic(pickRandom(aiPool));
+      if (aiPool.length) setTopic(pickAdaptiveTopic(aiPool, settings.topicPreferences));
+      return;
+    }
+    if (source === FAVORITE_SOURCE) {
+      if (favoriteTopics.length) setTopic(pickRandom(favoriteTopics));
       return;
     }
     if (source === ALL_SOURCE) {
-      setTopic(pickRandom(getDefaultTopicsPool()));
+      setTopic(pickAdaptiveTopic(getDefaultTopicsPool(), settings.topicPreferences));
       return;
     }
     drawTopic();
@@ -6719,8 +6881,7 @@ const ImprovMode = ({ intent, clearIntent }) => {
   const resetAll = () => { setStage('config'); cam.stop(); };
   const retrySame = async () => {
     rec.stop();
-    setStage('config');
-    setTimeout(begin, 50);
+    await begin();
   };
 
   // 「速记」模式 · 跳过 3 屏 config 直接给一张「题目 + 立即开练」卡
@@ -6751,6 +6912,9 @@ const ImprovMode = ({ intent, clearIntent }) => {
           <div className="font-display font-bold text-stone-900 leading-snug text-[20px] mt-1 pr-8">
             {topic || '...'}
           </div>
+          {!isPresetTake && (
+            <TopicPreferenceControls topic={topic} sourceKey={topicSourceKey} onHide={drawTopic} compact />
+          )}
         </div>
 
         <RecordingModeChooser compact className="mb-4" />
@@ -6903,6 +7067,23 @@ const ImprovMode = ({ intent, clearIntent }) => {
           <div className="text-xs text-stone-500 mt-1">已排除泛情感、闲聊、脑洞、生活问答；保留观点、小红书、职业、金钱和长期议题。</div>
         </button>
 
+        {favoriteTopics.length > 0 && (
+          <button
+            onClick={() => setSource(FAVORITE_SOURCE)}
+            className={`w-full mb-4 p-3 text-left transition-all border ${
+              source === FAVORITE_SOURCE ? 'border-[#A30236] bg-[#FBEFF2]' : 'border-stone-200 bg-white hover:border-[#A30236]'
+            }`}
+            style={{borderRadius:'3px'}}
+          >
+            <div className="flex items-center gap-2">
+              <Icon name="heart" size={14} className="text-[#A30236]" />
+              <span className="font-semibold text-sm">我的收藏</span>
+              <Tag color="amber">{favoriteTopics.length} 题</Tag>
+              <span className="ml-auto text-[10px] text-stone-500">只练你留下来的题</span>
+            </div>
+          </button>
+        )}
+
         <div className="mb-3 text-xs text-stone-500 font-medium tracking-wider uppercase">通用类别</div>
         <div className="flex flex-wrap gap-2 mb-5">
           {Object.entries(TOPIC_TYPES).map(([k,v]) => (
@@ -6949,9 +7130,11 @@ const ImprovMode = ({ intent, clearIntent }) => {
           <div className="text-[10px] text-[#A30236] mb-2 font-medium tracking-[0.12em] uppercase">
             {source === AI_SOURCE ? `AI 生成 · 主题：${aiTheme}`
               : source === ALL_SOURCE ? `精选混合 · ${totalDefaultTopics}+ 题随机`
+              : source === FAVORITE_SOURCE ? `我的收藏 · ${favoriteTopics.length} 题`
               : `${source} · ${allSources[source]?.blurb}`}
           </div>
           <div className="font-display font-bold text-stone-900 leading-snug text-[18px] mt-1">{topic || '...'}</div>
+          <TopicPreferenceControls topic={topic} sourceKey={topicSourceKey} onHide={drawTopic} />
         </div>
         <div className="flex items-center justify-between flex-wrap gap-3">
           <Btn variant="ghost" onClick={drawTopic} disabled={source === AI_SOURCE && !aiPool.length}><Icon name="refresh" size={14}/> 换一题</Btn>
@@ -8223,6 +8406,7 @@ const TutorialMode = () => {
   const [preCount, setPreCount] = useState(3);
   const cam = useCamera();
   const rec = useRecorder();
+  const settings = useSettings();
 
   useEffect(() => { setStage('learn'); }, [selected]);
 
@@ -8230,7 +8414,7 @@ const TutorialMode = () => {
     if (!practiceTopic) {
       // 随便给一个
       const pool = getDefaultTopicsPool();
-      setPracticeTopic(pickRandom(pool));
+      setPracticeTopic(pickAdaptiveTopic(pool, settings.topicPreferences));
       return;
     }
     const s = await cam.start();
@@ -8491,7 +8675,7 @@ const TutorialMode = () => {
             />
             <Btn variant="secondary" size="sm" onClick={() => {
               const pool = getDefaultTopicsPool();
-              setPracticeTopic(pickRandom(pool, practiceTopic));
+              setPracticeTopic(pickAdaptiveTopic(pool, settings.topicPreferences, practiceTopic));
             }}><Icon name="dice" size={13}/> 随机</Btn>
           </div>
         </div>
@@ -8647,10 +8831,11 @@ const EndlessMode = () => {
     else pool = allSources[source]?.topics;
     if (!pool || !pool.length) return '';
     const recentTopics = history.slice(-5).map(h => h.topic);
-    const candidates = pool.filter(t => !recentTopics.includes(t));
-    const usable = candidates.length ? candidates : pool;
+    const adaptive = buildAdaptiveTopicPool(pool, settings.topicPreferences, findTopicSourceKey);
+    const candidates = adaptive.filter(t => !recentTopics.includes(t));
+    const usable = candidates.length ? candidates : adaptive;
     return usable[Math.floor(Math.random() * usable.length)];
-  }, [source, aiPool, allSources]);
+  }, [source, aiPool, allSources, settings.topicPreferences]);
 
   const generateAI = async () => {
     if (!aiTheme.trim()) return;
@@ -9181,6 +9366,7 @@ const SettingsPanel = ({ onClose }) => {
   const [testStatus, setTestStatus] = useState(null);
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const fsSupported = !!window.showDirectoryPicker;
+  const topicPreferenceSummary = normalizeTopicPreferences(s.topicPreferences);
 
   const save = () => {
     s.setApiKey(keyInput.trim());
@@ -9328,6 +9514,33 @@ const SettingsPanel = ({ onClose }) => {
               💡 已切到纯语音 · 美颜 / 滤镜 / 背景虚化暂时无效 · 录制时显示音频波形
             </div>
           )}
+        </div>
+
+        <div className="mb-6 pt-6 border-t border-stone-200">
+          <div className="flex items-center gap-2 mb-2 flex-wrap">
+            <label className="text-sm font-medium">选题偏好</label>
+            <Tag color="emerald">仅保存在本机</Tag>
+          </div>
+          <div className="grid grid-cols-3 gap-2 mb-3">
+            <div className="bg-stone-50 border border-stone-200 p-2.5 text-center" style={{borderRadius:'3px'}}>
+              <div className="font-display font-bold text-[18px] text-emerald-700">{topicPreferenceSummary.interestedTopics.length}</div>
+              <div className="text-[10px] text-stone-500">想聊</div>
+            </div>
+            <div className="bg-stone-50 border border-stone-200 p-2.5 text-center" style={{borderRadius:'3px'}}>
+              <div className="font-display font-bold text-[18px] text-[#A30236]">{topicPreferenceSummary.favoriteTopics.length}</div>
+              <div className="text-[10px] text-stone-500">收藏</div>
+            </div>
+            <div className="bg-stone-50 border border-stone-200 p-2.5 text-center" style={{borderRadius:'3px'}}>
+              <div className="font-display font-bold text-[18px] text-stone-700">{topicPreferenceSummary.hiddenTopics.length}</div>
+              <div className="text-[10px] text-stone-500">已跳过</div>
+            </div>
+          </div>
+          <div className="flex items-center justify-between gap-3 text-[11px] text-stone-500">
+            <span>抽题会自动减少你不想聊的方向，并优先想聊与收藏题目。</span>
+            {(topicPreferenceSummary.interestedTopics.length > 0 || topicPreferenceSummary.favoriteTopics.length > 0 || topicPreferenceSummary.hiddenTopics.length > 0) && (
+              <button onClick={s.clearTopicPreferences} className="shrink-0 text-[#A30236] underline">重置偏好</button>
+            )}
+          </div>
         </div>
 
         <div className="mb-6 pt-6 border-t border-stone-200">
@@ -9630,6 +9843,26 @@ function App() {
   });
   const saveDirRef = useRef(null); // saveDir 可能 stale，用 ref 给 removeSavedFile 用
 
+  const [topicPreferences, setTopicPreferences] = useState(() => {
+    try {
+      return normalizeTopicPreferences(JSON.parse(localStorage.getItem('kobo.topicPreferences.v1') || '{}'));
+    } catch {
+      return normalizeTopicPreferences();
+    }
+  });
+  const changeTopicPreference = useCallback((payload) => {
+    setTopicPreferences(prev => {
+      const next = updateTopicPreference(prev, payload);
+      try { localStorage.setItem('kobo.topicPreferences.v1', JSON.stringify(next)); } catch {}
+      return next;
+    });
+  }, []);
+  const clearTopicPreferences = useCallback(() => {
+    const next = normalizeTopicPreferences();
+    setTopicPreferences(next);
+    try { localStorage.removeItem('kobo.topicPreferences.v1'); } catch {}
+  }, []);
+
   // 🎙️ 纯语音模式（不开摄像头 · 节电 + 隐私 · 仅录音）
   // 新用户默认视频录像；用户显式切过纯录音时尊重本地设置。
   const [voiceOnly, setVoiceOnlyState] = useState(() => {
@@ -9846,7 +10079,8 @@ function App() {
     voiceOnly, setVoiceOnly,
     reminderEnabled, setReminderEnabled, reminderTime, setReminderTime,
     routineAnchor, setRoutineAnchor,
-  }), [apiKey, userApiKey, isBuiltinKey, setApiKey, saveDir, savedFiles, addSavedFile, updateSavedFile, removeSavedFile, clearAllSavedFiles, dailyGoal, setDailyGoal, unlockedAchievements, markAchievementsSeen, lastWeeklyRecap, setLastWeeklyRecap, restDays, addRestDay, removeRestDay, voiceOnly, setVoiceOnly, reminderEnabled, setReminderEnabled, reminderTime, setReminderTime, routineAnchor, setRoutineAnchor]);
+    topicPreferences, changeTopicPreference, clearTopicPreferences,
+  }), [apiKey, userApiKey, isBuiltinKey, setApiKey, saveDir, savedFiles, addSavedFile, updateSavedFile, removeSavedFile, clearAllSavedFiles, dailyGoal, setDailyGoal, unlockedAchievements, markAchievementsSeen, lastWeeklyRecap, setLastWeeklyRecap, restDays, addRestDay, removeRestDay, voiceOnly, setVoiceOnly, reminderEnabled, setReminderEnabled, reminderTime, setReminderTime, routineAnchor, setRoutineAnchor, topicPreferences, changeTopicPreference, clearTopicPreferences]);
 
   // Mode → title for MobileHeader
   const headerSub = useMemo(() => {
