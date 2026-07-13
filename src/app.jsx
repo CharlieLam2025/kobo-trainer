@@ -62,6 +62,10 @@ const ICON_PATHS = {
   live:     <><circle cx="12" cy="12" r="2.5" fill="currentColor" stroke="none"/><path d="M8.5 8.5a5 5 0 010 7"/><path d="M15.5 8.5a5 5 0 010 7"/><path d="M5.5 5.5a9 9 0 010 13"/><path d="M18.5 5.5a9 9 0 010 13"/></>,
   heart:    <path d="M12 21s-7-4.5-7-10a4 4 0 017-2.6A4 4 0 0119 11c0 5.5-7 10-7 10z"/>,
   gift:     <><path d="M20 12v9H4v-9"/><path d="M2 7h20v5H2z"/><path d="M12 21V7M12 7s-1-4-3.5-4S5 4.5 5 6s2.5 1 7 1M12 7s1-4 3.5-4S19 4.5 19 6s-2.5 1-7 1"/></>,
+  camera:   <><path d="M4 7h3l1.5-2h7L17 7h3a1.5 1.5 0 011.5 1.5v9A1.5 1.5 0 0120 19H4a1.5 1.5 0 01-1.5-1.5v-9A1.5 1.5 0 014 7z"/><circle cx="12" cy="13" r="3.5"/></>,
+  cameraSwitch: <><path d="M3 8h3l1.4-2h6.1"/><path d="M18 6l2.5 2L18 10"/><path d="M21 16h-3l-1.4 2h-6.1"/><path d="M6 18l-2.5-2L6 14"/><circle cx="12" cy="12" r="3"/></>,
+  mirror:   <><path d="M12 3v18"/><path d="M8.5 7L4 12l4.5 5"/><path d="M15.5 7L20 12l-4.5 5"/></>,
+  grid:     <><rect x="3" y="3" width="18" height="18" rx="1"/><path d="M9 3v18M15 3v18M3 9h18M3 15h18"/></>,
 };
 
 const Icon = ({ name, size = 20, strokeWidth = 1.75, className = '', style = {} }) => {
@@ -2986,7 +2990,7 @@ const computeFilterCSS = (presetId, level) => {
 // 砍掉了瘦脸 / 大眼 · 只剩真磨皮需要 face oval 36 点
 const FACE_OVAL_IDX = [10,338,297,332,284,251,389,356,454,323,361,288,397,365,379,378,400,377,152,148,176,149,150,136,172,58,132,93,234,127,162,21,54,103,67,109];
 
-// 构造路径（landmarks 已经做过 mirror，所以 x 是显示坐标）
+// 构造路径（landmarks 与成片 canvas 使用相同的观众视角坐标）
 const tracePath = (ctx, lm, idx, w, h) => {
   ctx.beginPath();
   for (let i = 0; i < idx.length; i++) {
@@ -3019,6 +3023,69 @@ async function fetchWithProgress(url, onProgress) {
   } catch { return false; }
 }
 
+const CAMERA_PREFS_KEY = 'kobo.cameraPreferences.v1';
+const DEFAULT_CAMERA_PREFS = Object.freeze({
+  cameraFacing: 'user',
+  mirrorPreview: true,
+  compositionGuide: true,
+});
+
+const loadCameraPreferences = () => {
+  try {
+    const stored = JSON.parse(localStorage.getItem(CAMERA_PREFS_KEY) || '{}');
+    return {
+      cameraFacing: stored.cameraFacing === 'environment' ? 'environment' : 'user',
+      mirrorPreview: stored.mirrorPreview !== false,
+      compositionGuide: stored.compositionGuide !== false,
+    };
+  } catch {
+    return { ...DEFAULT_CAMERA_PREFS };
+  }
+};
+
+const cameraVideoConstraints = (cameraFacing) => ({
+  width: { ideal: 720 },
+  height: { ideal: 1280 },
+  aspectRatio: { ideal: 9 / 16 },
+  facingMode: { ideal: cameraFacing === 'environment' ? 'environment' : 'user' },
+});
+
+const CAMERA_OUTPUT_WIDTH = 720;
+const CAMERA_OUTPUT_HEIGHT = 1280;
+
+const getCoverCrop = (sourceWidth, sourceHeight) => {
+  const targetAspect = CAMERA_OUTPUT_WIDTH / CAMERA_OUTPUT_HEIGHT;
+  const sourceAspect = sourceWidth / sourceHeight;
+  if (sourceAspect > targetAspect) {
+    const width = sourceHeight * targetAspect;
+    return { x: (sourceWidth - width) / 2, y: 0, width, height: sourceHeight };
+  }
+  const height = sourceWidth / targetAspect;
+  return { x: 0, y: (sourceHeight - height) / 2, width: sourceWidth, height };
+};
+
+const formatMediaDeviceError = (error, voiceOnly = false) => {
+  const name = error?.name || '';
+  if (name === 'NotAllowedError' || name === 'PermissionDeniedError') {
+    return voiceOnly
+      ? '麦克风权限被关闭，请在浏览器或系统设置中允许后重试。'
+      : '摄像头或麦克风权限被关闭，请在浏览器或系统设置中允许后重试。';
+  }
+  if (name === 'NotFoundError' || name === 'DevicesNotFoundError') {
+    return voiceOnly ? '没有检测到可用麦克风。' : '没有检测到可用的摄像头或麦克风。';
+  }
+  if (name === 'NotReadableError' || name === 'TrackStartError') {
+    return '设备正被其他应用占用，请关闭其他相机或录音应用后重试。';
+  }
+  if (name === 'OverconstrainedError' || name === 'ConstraintNotSatisfiedError') {
+    return '当前设备不支持所选镜头，请换一个摄像头后重试。';
+  }
+  if (name === 'SecurityError') {
+    return '当前页面无法调用摄像头，请使用 HTTPS 地址或安装版应用。';
+  }
+  return error?.message ? `设备启动失败：${error.message}` : '设备启动失败，请重试。';
+};
+
 // ===== 美颜 hook：MediaPipe 检测 + canvas 2D 应用 =====
 function useCamera() {
   // 读取全局"纯语音"设置 · settings 可能在 Context 外被调用，因此用 try/catch 兜底
@@ -3030,14 +3097,24 @@ function useCamera() {
   const voiceOnlyRef = useRef(voiceOnlySetting);
   voiceOnlyRef.current = voiceOnlySetting;
 
+  const initialCameraPrefsRef = useRef(null);
+  if (!initialCameraPrefsRef.current) initialCameraPrefsRef.current = loadCameraPreferences();
+  const [cameraFacing, setCameraFacingState] = useState(initialCameraPrefsRef.current.cameraFacing);
+  const [mirrorPreview, setMirrorPreviewState] = useState(initialCameraPrefsRef.current.mirrorPreview);
+  const [compositionGuide, setCompositionGuideState] = useState(initialCameraPrefsRef.current.compositionGuide);
+  const cameraPrefsRef = useRef(initialCameraPrefsRef.current);
+  const cameraFacingRef = useRef(cameraFacing);
+  cameraFacingRef.current = cameraFacing;
+
   const streamRef        = useRef(null); // 原始 getUserMedia 流
-  const videoElRef       = useRef(null); // 显示用 <video>（带 CSS filter）
+  const videoElRef       = useRef(null); // 显示用 <video>（优先绑定最终 canvas 流）
   const hiddenVideoRef   = useRef(null); // 隐藏 <video>，喂给 canvas
   const canvasRef        = useRef(null); // 输出 canvas（送录像器）
   const scratchRef       = useRef(null); // 临时 canvas（磨皮模糊/区域捕获）
   const filteredStreamRef= useRef(null); // canvas.captureStream + audio
   const rafRef           = useRef(null);
   const filterCSSRef     = useRef('none');
+  const cameraSessionRef = useRef(0);
 
   const landmarkerRef    = useRef(null); // MediaPipe FaceLandmarker 实例
   const segmenterRef     = useRef(null); // MediaPipe ImageSegmenter 实例（selfie）
@@ -3058,6 +3135,65 @@ function useCamera() {
 
   const [active, setActive] = useState(false);
   const [error,  setError]  = useState(null);
+  const [switchingCamera, setSwitchingCamera] = useState(false);
+  const switchingCameraRef = useRef(false);
+  const [cameraCount, setCameraCount] = useState(null);
+  const [deviceCheck, setDeviceCheck] = useState({
+    status: 'idle',
+    camera: voiceOnlySetting ? 'off' : 'idle',
+    microphone: 'idle',
+    cameraLabel: '',
+    microphoneLabel: '',
+  });
+
+  const saveCameraPreference = useCallback((key, value) => {
+    const next = { ...cameraPrefsRef.current, [key]: value };
+    cameraPrefsRef.current = next;
+    try { localStorage.setItem(CAMERA_PREFS_KEY, JSON.stringify(next)); } catch {}
+  }, []);
+
+  const setMirrorPreview = useCallback((value) => {
+    const next = typeof value === 'function' ? value(cameraPrefsRef.current.mirrorPreview) : value;
+    const normalized = !!next;
+    setMirrorPreviewState(normalized);
+    saveCameraPreference('mirrorPreview', normalized);
+  }, [saveCameraPreference]);
+
+  const setCompositionGuide = useCallback((value) => {
+    const next = typeof value === 'function' ? value(cameraPrefsRef.current.compositionGuide) : value;
+    const normalized = !!next;
+    setCompositionGuideState(normalized);
+    saveCameraPreference('compositionGuide', normalized);
+  }, [saveCameraPreference]);
+
+  const refreshCameraCount = useCallback(async () => {
+    if (!navigator.mediaDevices?.enumerateDevices) return;
+    try {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      setCameraCount(devices.filter(device => device.kind === 'videoinput').length);
+    } catch {}
+  }, []);
+
+  const releaseMediaResources = useCallback(() => {
+    if (rafRef.current) {
+      cancelAnimationFrame(rafRef.current);
+      rafRef.current = null;
+    }
+    const tracks = new Set([
+      ...(filteredStreamRef.current?.getTracks?.() || []),
+      ...(streamRef.current?.getTracks?.() || []),
+    ]);
+    tracks.forEach(track => track.stop());
+    filteredStreamRef.current = null;
+    streamRef.current = null;
+    if (hiddenVideoRef.current) {
+      try { hiddenVideoRef.current.srcObject = null; } catch {}
+      hiddenVideoRef.current = null;
+    }
+    if (videoElRef.current) {
+      try { videoElRef.current.srcObject = null; } catch {}
+    }
+  }, []);
 
   // 监听 MediaPipe ready
   useEffect(() => {
@@ -3071,7 +3207,10 @@ function useCamera() {
   useEffect(() => {
     const css = computeFilterCSS(filterPreset, beautyLevel);
     filterCSSRef.current = css;
-    if (videoElRef.current) videoElRef.current.style.filter = css;
+    if (videoElRef.current) {
+      // 录像预览绑定 canvas 输出时，滤镜已经烧进画面，不能再套第二遍。
+      videoElRef.current.style.filter = filteredStreamRef.current ? 'none' : css;
+    }
   }, [filterPreset, beautyLevel]);
 
   // 懒加载 FaceLandmarker：用户开启任一面部 FX 时才初始化
@@ -3158,9 +3297,10 @@ function useCamera() {
   const attachVideo = useCallback((el) => {
     videoElRef.current = el;
     if (el) {
-      el.style.filter = filterCSSRef.current;
-      if (streamRef.current) {
-        el.srcObject = streamRef.current;
+      const previewStream = filteredStreamRef.current || streamRef.current;
+      el.style.filter = filteredStreamRef.current ? 'none' : filterCSSRef.current;
+      if (previewStream) {
+        el.srcObject = previewStream;
         el.muted = true;
         el.play().catch(() => {});
       }
@@ -3168,21 +3308,73 @@ function useCamera() {
   }, []);
 
   const start = useCallback(async () => {
+    const sessionId = cameraSessionRef.current + 1;
+    cameraSessionRef.current = sessionId;
+    releaseMediaResources();
+    setActive(false);
+    setError(null);
+    setDeviceCheck({
+      status: 'checking',
+      camera: voiceOnlyRef.current ? 'off' : 'checking',
+      microphone: 'checking',
+      cameraLabel: '',
+      microphoneLabel: '',
+    });
     try {
       // 🎙️ 纯语音模式：跳过所有 video 设置 · audio-only 流
       if (voiceOnlyRef.current) {
         const s = await navigator.mediaDevices.getUserMedia({ video: false, audio: true });
+        if (sessionId !== cameraSessionRef.current) {
+          s.getTracks().forEach(track => track.stop());
+          return null;
+        }
+        const audioTrack = s.getAudioTracks()[0];
+        if (!audioTrack) {
+          s.getTracks().forEach(track => track.stop());
+          throw new DOMException('Microphone track unavailable', 'NotFoundError');
+        }
         streamRef.current = s;
         filteredStreamRef.current = s; // 没有 canvas 处理 · 录制直接录 audio
+        setDeviceCheck({
+          status: 'ready',
+          camera: 'off',
+          microphone: 'ready',
+          cameraLabel: '',
+          microphoneLabel: audioTrack.label || '默认麦克风',
+        });
         setActive(true);
         setError(null);
         return s;
       }
       const s = await navigator.mediaDevices.getUserMedia({
-        video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user' },
+        video: cameraVideoConstraints(cameraFacingRef.current),
         audio: true,
       });
+      if (sessionId !== cameraSessionRef.current) {
+        s.getTracks().forEach(track => track.stop());
+        return null;
+      }
+      const videoTrack = s.getVideoTracks()[0];
+      const audioTrack = s.getAudioTracks()[0];
+      if (!videoTrack || !audioTrack) {
+        s.getTracks().forEach(track => track.stop());
+        throw new DOMException('Required media track unavailable', 'NotFoundError');
+      }
       streamRef.current = s;
+      const actualFacing = videoTrack.getSettings?.().facingMode;
+      if (actualFacing === 'user' || actualFacing === 'environment') {
+        cameraFacingRef.current = actualFacing;
+        setCameraFacingState(actualFacing);
+        saveCameraPreference('cameraFacing', actualFacing);
+      }
+      setDeviceCheck({
+        status: 'ready',
+        camera: 'ready',
+        microphone: 'ready',
+        cameraLabel: videoTrack.label || (cameraFacingRef.current === 'environment' ? '后置摄像头' : '前置摄像头'),
+        microphoneLabel: audioTrack.label || '默认麦克风',
+      });
+      refreshCameraCount();
 
       const hv = document.createElement('video');
       hv.srcObject = s;
@@ -3192,7 +3384,7 @@ function useCamera() {
 
       const canvas = canvasRef.current || (() => {
         const c = document.createElement('canvas');
-        c.width = 1280; c.height = 720;
+        c.width = CAMERA_OUTPUT_WIDTH; c.height = CAMERA_OUTPUT_HEIGHT;
         canvasRef.current = c;
         return c;
       })();
@@ -3200,7 +3392,7 @@ function useCamera() {
 
       const scratch = scratchRef.current || (() => {
         const c = document.createElement('canvas');
-        c.width = 1280; c.height = 720;
+        c.width = CAMERA_OUTPUT_WIDTH; c.height = CAMERA_OUTPUT_HEIGHT;
         scratchRef.current = c;
         return c;
       })();
@@ -3214,10 +3406,9 @@ function useCamera() {
 
       const draw = () => {
         if (hv.videoWidth) {
-          if (canvas.width  !== hv.videoWidth)  { canvas.width  = hv.videoWidth;  scratch.width  = hv.videoWidth;  }
-          if (canvas.height !== hv.videoHeight) { canvas.height = hv.videoHeight; scratch.height = hv.videoHeight; }
-
           const W = canvas.width, H = canvas.height;
+          const sourceWidth = hv.videoWidth, sourceHeight = hv.videoHeight;
+          const crop = getCoverCrop(sourceWidth, sourceHeight);
           const skin = skinRef.current;
           const needFx = skin > 0;
 
@@ -3235,18 +3426,18 @@ function useCamera() {
             cachedLandmarks = null;
           }
 
-          // 第一步：清空 + 把镜像后的原始帧画到主 canvas（不带 ctx.filter）
+          // 第一步：清空 + 把观众视角的原始帧画到主 canvas（不带 ctx.filter）。
+          // 居中裁成真正的 9:16；自拍镜像只属于预览层，成片文字方向始终正常。
           try { ctx.filter = 'none'; } catch {}
-          ctx.save();
-          ctx.scale(-1, 1);
-          ctx.drawImage(hv, -W, 0, W, H);
-          ctx.restore();
+          ctx.drawImage(hv, crop.x, crop.y, crop.width, crop.height, 0, 0, W, H);
 
           // 第二步：如果检测到人脸 + 用户开启了真磨皮 → 在主 canvas 上局部柔焦
           // 砍掉了瘦脸 / 大眼形变 · 训练工具不变形脸 · 只在皮肤区域柔焦
           if (cachedLandmarks && needFx && skin > 0) {
-            // landmarks 来自原始视频，但主 canvas 是镜像的，所以 x 要反向
-            const lm = cachedLandmarks.map(p => ({ x: 1 - p.x, y: p.y }));
+            const lm = cachedLandmarks.map(point => ({
+              x: ((point.x * sourceWidth) - crop.x) / crop.width,
+              y: ((point.y * sourceHeight) - crop.y) / crop.height,
+            }));
             const blurPx = 5 + skin * 9; // 强度 0→1 时 5→14 px
             sctx.clearRect(0, 0, W, H);
             try { sctx.filter = `blur(${blurPx}px)`; } catch {}
@@ -3315,13 +3506,15 @@ function useCamera() {
               try { ctx.filter = 'none'; } catch {}
               ctx.restore();
 
-              // 把 mask 镜像后乘到 scratch 上（destination-in：只保留人物像素）
-              // hv 没镜像，但 canvas/scratch 都镜像过，所以 mask 要水平翻转再画
+              // 把 mask 乘到 scratch 上（destination-in：只保留人物像素）。
+              // mask 与原视频同坐标，使用相同的 9:16 裁切映射到输出画布。
               sctx.save();
               sctx.globalCompositeOperation = 'destination-in';
-              sctx.translate(W, 0);
-              sctx.scale(-1, 1);
-              sctx.drawImage(mc, 0, 0, W, H);
+              const maskX = (crop.x / sourceWidth) * mc.width;
+              const maskY = (crop.y / sourceHeight) * mc.height;
+              const maskWidth = (crop.width / sourceWidth) * mc.width;
+              const maskHeight = (crop.height / sourceHeight) * mc.height;
+              sctx.drawImage(mc, maskX, maskY, maskWidth, maskHeight, 0, 0, W, H);
               sctx.restore();
 
               // sharp 前景叠到模糊背景上
@@ -3349,9 +3542,9 @@ function useCamera() {
       filteredStreamRef.current = canvasStream;
 
       if (videoElRef.current) {
-        videoElRef.current.srcObject = s;
+        videoElRef.current.srcObject = canvasStream;
         videoElRef.current.muted = true;
-        videoElRef.current.style.filter = filterCSSRef.current;
+        videoElRef.current.style.filter = 'none';
         try { await videoElRef.current.play(); } catch {}
       }
 
@@ -3359,42 +3552,146 @@ function useCamera() {
       setError(null);
       return canvasStream;
     } catch (err) {
-      setError(err.message || String(err));
+      if (sessionId !== cameraSessionRef.current) return null;
+      releaseMediaResources();
+      const message = formatMediaDeviceError(err, voiceOnlyRef.current);
+      setDeviceCheck(prev => ({
+        ...prev,
+        status: 'error',
+        camera: voiceOnlyRef.current ? 'off' : (prev.camera === 'ready' ? 'ready' : 'error'),
+        microphone: prev.microphone === 'ready' ? 'ready' : 'error',
+      }));
+      setError(message);
       return null;
     }
-  }, []);
+  }, [refreshCameraCount, releaseMediaResources, saveCameraPreference]);
+
+  const switchCamera = useCallback(async () => {
+    if (voiceOnlyRef.current || switchingCameraRef.current || !streamRef.current) return false;
+    const rawStream = streamRef.current;
+    const sessionId = cameraSessionRef.current;
+    const currentFacing = cameraFacingRef.current;
+    const nextFacing = currentFacing === 'user' ? 'environment' : 'user';
+    const oldVideoTracks = rawStream.getVideoTracks();
+
+    switchingCameraRef.current = true;
+    setSwitchingCamera(true);
+    setError(null);
+    setDeviceCheck(prev => ({ ...prev, status: 'checking', camera: 'checking' }));
+
+    const attachTrack = async (track) => {
+      if (sessionId !== cameraSessionRef.current || streamRef.current !== rawStream) {
+        track.stop();
+        return false;
+      }
+      rawStream.addTrack(track);
+      const hv = hiddenVideoRef.current;
+      if (hv) {
+        hv.srcObject = null;
+        hv.srcObject = rawStream;
+        try { await hv.play(); } catch {}
+      }
+      // 正常录制时预览绑定 canvas 流；仅在 canvas 尚未建立时才回退到原始流。
+      if (videoElRef.current && !filteredStreamRef.current) {
+        videoElRef.current.srcObject = rawStream;
+        try { await videoElRef.current.play(); } catch {}
+      }
+      return true;
+    };
+
+    oldVideoTracks.forEach(track => {
+      rawStream.removeTrack(track);
+      track.stop();
+    });
+
+    try {
+      const replacementStream = await navigator.mediaDevices.getUserMedia({
+        video: cameraVideoConstraints(nextFacing),
+        audio: false,
+      });
+      if (sessionId !== cameraSessionRef.current || streamRef.current !== rawStream) {
+        replacementStream.getTracks().forEach(track => track.stop());
+        return false;
+      }
+      const replacementTrack = replacementStream.getVideoTracks()[0];
+      if (!replacementTrack) throw new DOMException('Camera track unavailable', 'NotFoundError');
+      if (!(await attachTrack(replacementTrack))) return false;
+
+      const actualFacing = replacementTrack.getSettings?.().facingMode;
+      const resolvedFacing = actualFacing === 'user' || actualFacing === 'environment' ? actualFacing : nextFacing;
+      cameraFacingRef.current = resolvedFacing;
+      setCameraFacingState(resolvedFacing);
+      saveCameraPreference('cameraFacing', resolvedFacing);
+      setDeviceCheck(prev => ({
+        ...prev,
+        status: prev.microphone === 'ready' ? 'ready' : prev.status,
+        camera: 'ready',
+        cameraLabel: replacementTrack.label || (resolvedFacing === 'environment' ? '后置摄像头' : '前置摄像头'),
+      }));
+      refreshCameraCount();
+      return true;
+    } catch (switchError) {
+      if (sessionId !== cameraSessionRef.current || streamRef.current !== rawStream) return false;
+      // iOS 切镜头需要先释放旧轨道；若新镜头不可用，立即尝试恢复原镜头。
+      try {
+        const fallbackStream = await navigator.mediaDevices.getUserMedia({
+          video: cameraVideoConstraints(currentFacing),
+          audio: false,
+        });
+        const fallbackTrack = fallbackStream.getVideoTracks()[0];
+        if (fallbackTrack) {
+          if (!(await attachTrack(fallbackTrack))) return false;
+          setDeviceCheck(prev => ({
+            ...prev,
+            status: prev.microphone === 'ready' ? 'ready' : prev.status,
+            camera: 'ready',
+            cameraLabel: fallbackTrack.label || (currentFacing === 'environment' ? '后置摄像头' : '前置摄像头'),
+          }));
+        }
+      } catch {
+        setDeviceCheck(prev => ({ ...prev, status: 'error', camera: 'error' }));
+      }
+      setError(`镜头切换失败。${formatMediaDeviceError(switchError, false)}`);
+      return false;
+    } finally {
+      if (sessionId === cameraSessionRef.current) {
+        switchingCameraRef.current = false;
+        setSwitchingCamera(false);
+      }
+    }
+  }, [refreshCameraCount, saveCameraPreference]);
 
   const stop = useCallback(() => {
-    if (rafRef.current) { cancelAnimationFrame(rafRef.current); rafRef.current = null; }
-    if (filteredStreamRef.current) {
-      filteredStreamRef.current.getTracks().forEach(t => t.stop());
-      filteredStreamRef.current = null;
-    }
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach(t => t.stop());
-      streamRef.current = null;
-    }
-    if (hiddenVideoRef.current) {
-      try { hiddenVideoRef.current.srcObject = null; } catch {}
-      hiddenVideoRef.current = null;
-    }
-    if (videoElRef.current) {
-      try { videoElRef.current.srcObject = null; } catch {}
-    }
+    cameraSessionRef.current += 1;
+    releaseMediaResources();
     setActive(false);
-  }, []);
+    setSwitchingCamera(false);
+    switchingCameraRef.current = false;
+    setDeviceCheck({
+      status: 'idle',
+      camera: voiceOnlyRef.current ? 'off' : 'idle',
+      microphone: 'idle',
+      cameraLabel: '',
+      microphoneLabel: '',
+    });
+  }, [releaseMediaResources]);
 
   useEffect(() => () => {
-    if (rafRef.current) cancelAnimationFrame(rafRef.current);
-    if (streamRef.current) streamRef.current.getTracks().forEach(t => t.stop());
+    cameraSessionRef.current += 1;
+    releaseMediaResources();
     if (landmarkerRef.current) { try { landmarkerRef.current.close(); } catch {} landmarkerRef.current = null; }
     if (segmenterRef.current)  { try { segmenterRef.current.close(); }  catch {} segmenterRef.current  = null; }
     maskCanvasRef.current = null;
-  }, []);
+  }, [releaseMediaResources]);
 
   return {
     videoRef: attachVideo,
     active, error, start, stop,
+    cameraFacing, switchCamera, switchingCamera, cameraCount,
+    mirrorPreview, setMirrorPreview,
+    compositionGuide, setCompositionGuide,
+    previewMirrored: cameraFacing === 'user' && mirrorPreview,
+    deviceCheck,
     filterPreset, setFilterPreset,
     beautyLevel,  setBeautyLevel,
     skinSmooth,   setSkinSmooth,
@@ -3662,22 +3959,149 @@ const TopBar = ({ mode, onBack, onOpenSettings }) => {
   );
 };
 
+const DeviceStatusItem = ({ icon, label, status, title }) => {
+  const tone = {
+    ready: 'text-emerald-700 bg-emerald-50 border-emerald-200',
+    checking: 'text-amber-700 bg-amber-50 border-amber-200',
+    error: 'text-red-700 bg-red-50 border-red-200',
+    off: 'text-stone-500 bg-stone-100 border-stone-200',
+    idle: 'text-stone-500 bg-stone-100 border-stone-200',
+  }[status] || 'text-stone-500 bg-stone-100 border-stone-200';
+  const statusLabel = {
+    ready: '已就绪',
+    checking: '检查中',
+    error: '不可用',
+    off: '已关闭',
+    idle: '待检查',
+  }[status] || '待检查';
+  return (
+    <div className={`h-8 px-2.5 border flex items-center gap-1.5 ${tone}`} style={{borderRadius:'3px'}} title={title || `${label}${statusLabel}`}>
+      <Icon name={icon} size={13} strokeWidth={1.9}/>
+      <span className="text-[10px] font-bold whitespace-nowrap">{label}{statusLabel}</span>
+    </div>
+  );
+};
+
+const CameraDeviceStrip = ({ cam, className = '' }) => {
+  if (!cam) return null;
+  return (
+    <div className={`flex items-center gap-1.5 ${className}`} data-testid="camera-device-check">
+      {!cam.voiceOnly && (
+        <DeviceStatusItem
+          icon="camera"
+          label="镜头"
+          status={cam.deviceCheck.camera}
+          title={cam.deviceCheck.cameraLabel || '摄像头状态'}
+        />
+      )}
+      <DeviceStatusItem
+        icon="mic"
+        label="收音"
+        status={cam.deviceCheck.microphone}
+        title={cam.deviceCheck.microphoneLabel || '麦克风状态'}
+      />
+    </div>
+  );
+};
+
+const CameraCompositionGuide = ({ visible }) => {
+  if (!visible) return null;
+  return (
+    <div className="absolute inset-0 z-[2] pointer-events-none flex items-center justify-center" data-testid="composition-guide" aria-hidden="true">
+      <div
+        className="relative aspect-[9/16] border border-white/35 shadow-[0_0_0_9999px_rgba(0,0,0,0.04)]"
+        style={{width:'min(100%, calc(100vh * 9 / 16))', maxHeight:'100%'}}
+      >
+        <div className="absolute top-1/3 left-0 right-0 border-t border-dashed border-amber-200/55" />
+        <div className="absolute top-2/3 left-0 right-0 border-t border-dashed border-white/20" />
+        <div className="absolute left-1/3 top-0 bottom-0 border-l border-dashed border-white/20" />
+        <div className="absolute left-2/3 top-0 bottom-0 border-l border-dashed border-white/20" />
+        <div className="absolute -top-5 left-0 text-[9px] font-bold text-white/65">9:16</div>
+        <span className="absolute -top-px -left-px w-5 h-5 border-t-2 border-l-2 border-white/80" />
+        <span className="absolute -top-px -right-px w-5 h-5 border-t-2 border-r-2 border-white/80" />
+        <span className="absolute -bottom-px -left-px w-5 h-5 border-b-2 border-l-2 border-white/80" />
+        <span className="absolute -bottom-px -right-px w-5 h-5 border-b-2 border-r-2 border-white/80" />
+      </div>
+    </div>
+  );
+};
+
+const CameraControlDock = ({ cam }) => {
+  if (!cam || cam.voiceOnly) return null;
+  const switchUnavailable = cam.switchingCamera || cam.cameraCount === 1;
+  const controlClass = 'w-10 h-10 shrink-0 flex items-center justify-center border transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-300 disabled:opacity-35 disabled:cursor-not-allowed';
+  const idleClass = 'bg-stone-950/80 border-white/15 text-white hover:bg-stone-900';
+  const activeClass = 'bg-white border-white text-stone-950';
+  return (
+    <div className="absolute right-3 top-1/2 -translate-y-1/2 z-[45] flex flex-col gap-1.5" data-testid="camera-control-dock">
+      <button
+        type="button"
+        onClick={cam.switchCamera}
+        disabled={switchUnavailable}
+        className={`${controlClass} ${idleClass}`}
+        style={{borderRadius:'4px'}}
+        aria-label={cam.cameraFacing === 'user' ? '切换到后置摄像头' : '切换到前置摄像头'}
+        title={cam.cameraCount === 1 ? '当前只检测到一个摄像头' : (cam.cameraFacing === 'user' ? '切换到后置摄像头' : '切换到前置摄像头')}
+        data-testid="switch-camera"
+      >
+        <Icon name="cameraSwitch" size={18} className={cam.switchingCamera ? 'animate-spin' : ''}/>
+      </button>
+      <button
+        type="button"
+        onClick={() => cam.setMirrorPreview(value => !value)}
+        disabled={cam.cameraFacing !== 'user'}
+        className={`${controlClass} ${cam.previewMirrored ? activeClass : idleClass}`}
+        style={{borderRadius:'4px'}}
+        aria-label={cam.previewMirrored ? '关闭自拍镜像' : '开启自拍镜像'}
+        aria-pressed={cam.previewMirrored}
+        title={cam.cameraFacing !== 'user' ? '后置镜头无需镜像' : '切换自拍镜像（只影响预览）'}
+        data-testid="toggle-mirror"
+      >
+        <Icon name="mirror" size={18}/>
+      </button>
+      <button
+        type="button"
+        onClick={() => cam.setCompositionGuide(value => !value)}
+        className={`${controlClass} ${cam.compositionGuide ? activeClass : idleClass}`}
+        style={{borderRadius:'4px'}}
+        aria-label={cam.compositionGuide ? '关闭九比十六构图线' : '开启九比十六构图线'}
+        aria-pressed={cam.compositionGuide}
+        title="9:16 构图辅助线"
+        data-testid="toggle-composition-guide"
+      >
+        <Icon name="grid" size={17}/>
+      </button>
+      <div className="h-8 bg-stone-950/80 border border-white/15 flex items-center justify-center gap-1.5" style={{borderRadius:'4px'}} title="摄像头与麦克风设备状态">
+        <span className={`w-1.5 h-1.5 rounded-full ${cam.deviceCheck.camera === 'ready' ? 'bg-emerald-400' : cam.deviceCheck.camera === 'checking' ? 'bg-amber-300 animate-pulse' : 'bg-red-400'}`} />
+        <span className={`w-1.5 h-1.5 rounded-full ${cam.deviceCheck.microphone === 'ready' ? 'bg-emerald-400' : cam.deviceCheck.microphone === 'checking' ? 'bg-amber-300 animate-pulse' : 'bg-red-400'}`} />
+      </div>
+    </div>
+  );
+};
+
+const CameraErrorToast = ({ cam }) => cam?.error ? (
+  <div className="absolute left-1/2 -translate-x-1/2 z-[55] w-[min(88%,420px)] bg-red-700/95 text-white px-3 py-2.5 text-[12px] font-medium shadow-lg" style={{top:'calc(env(safe-area-inset-top, 0px) + 64px)', borderRadius:'4px'}} role="alert">
+    {cam.error}
+  </div>
+) : null;
+
 // ============ Ready Overlay (3-2-1) ============
-const ReadyOverlay = ({ countdown, videoRef, hint, voiceOnly = false }) => (
+const ReadyOverlay = ({ countdown, cam, hint }) => (
   <div className="absolute inset-0 bg-stone-950 z-50" style={{borderRadius:0}}>
     {/* 摄像头 —— 自拍模式（镜像），全屏可见以便用户构图 · 纯语音模式不渲染 video */}
-    {voiceOnly ? (
+    {cam.voiceOnly ? (
       <div className="absolute inset-0 flex items-center justify-center" style={{background:'linear-gradient(135deg, #3a0716 0%, #1c1917 100%)'}}>
         <div className="text-7xl opacity-50">🎙️</div>
       </div>
     ) : (
-      <video ref={videoRef} autoPlay playsInline muted
-        className="absolute inset-0 w-full h-full object-cover"
-        style={{ transform: 'scaleX(-1)' }}
+      <video ref={cam.videoRef} autoPlay playsInline muted
+        className="absolute inset-0 w-full h-full object-contain"
+        style={{ transform: cam.previewMirrored ? 'scaleX(-1)' : 'none' }}
       />
     )}
     {/* 半透明遮罩让倒计时更易读 */}
     <div className="absolute inset-0" style={{background:'linear-gradient(to bottom, rgba(15,15,15,0.78) 0%, rgba(15,15,15,0.45) 40%, rgba(15,15,15,0.45) 60%, rgba(15,15,15,0.78) 100%)'}} />
+    {!cam.voiceOnly && <CameraCompositionGuide visible={cam.compositionGuide} />}
 
     {/* RANEPA frame chrome: thin crimson rules + corner ticks */}
     <div className="absolute inset-0 pointer-events-none">
@@ -3713,16 +4137,14 @@ const ReadyOverlay = ({ countdown, videoRef, hint, voiceOnly = false }) => (
       )}
     </div>
 
-    {/* 顶部左：摄像头实时指示 */}
-    <div className="absolute top-12 left-8 flex items-center gap-2 bg-white text-stone-900 px-3 py-1.5 text-[11px] tracking-[0.2em] font-bold border-l-[3px] border-[#A30236]" style={{borderRadius:'2px'}}>
-      <span className="w-1.5 h-1.5 bg-[#A30236] pulse-rec" />
-      摄像头已开启
-    </div>
+    <CameraDeviceStrip cam={cam} className="absolute top-12 left-8 z-[45]" />
+    <CameraControlDock cam={cam} />
+    <CameraErrorToast cam={cam} />
   </div>
 );
 
 // ============ Camera Frame ============
-const CameraFrame = ({ videoRef, overlay, className='', voiceOnly = false, streamRef = null, status = 'idle' }) => {
+const CameraFrame = ({ videoRef, overlay, className='', voiceOnly = false, streamRef = null, status = 'idle', cam = null }) => {
   const statusRing = status === 'recording'
     ? 'ring-2 ring-[#A30236] ring-offset-1 ring-offset-stone-950'
     : status === 'preparing'
@@ -3739,8 +4161,11 @@ const CameraFrame = ({ videoRef, overlay, className='', voiceOnly = false, strea
   }
   return (
     <div className={frameClass}>
-      <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover" style={{transform:'scaleX(-1)'}} />
+      <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-contain" style={{transform: cam?.previewMirrored ? 'scaleX(-1)' : 'none'}} />
+      <CameraCompositionGuide visible={!!cam?.compositionGuide} />
       {overlay}
+      <CameraControlDock cam={cam} />
+      <CameraErrorToast cam={cam} />
     </div>
   );
 };
@@ -6942,14 +7367,14 @@ const ImprovMode = ({ intent, clearIntent }) => {
     );
   }
 
-  if (stage === 'ready') return <ReadyOverlay countdown={preCount} videoRef={cam.videoRef} voiceOnly={cam.voiceOnly} hint={topic} />;
+  if (stage === 'ready') return <ReadyOverlay countdown={preCount} cam={cam} hint={topic} />;
 
   if (stage === 'recording') {
     const progress = effectiveDuration ? Math.max(0, timeLeft) / effectiveDuration : 0;
     const urgent = effectiveDuration && timeLeft <= 5 && timeLeft > 0;
     return (
       <div className="absolute inset-0 z-[70] bg-stone-950" style={{borderRadius:0}}>
-        <CameraFrame videoRef={cam.videoRef} voiceOnly={cam.voiceOnly} streamRef={cam.streamRef} className="w-full h-full" status="recording"
+        <CameraFrame videoRef={cam.videoRef} voiceOnly={cam.voiceOnly} streamRef={cam.streamRef} cam={cam} className="w-full h-full" status="recording"
           overlay={
             <>
               <PracticeStageOverlay
@@ -7422,7 +7847,7 @@ const TeleprompterMode = () => {
   if (stage === 'recording') {
     return (
       <div className="absolute inset-0 z-[70] bg-stone-950 fade-in" style={{borderRadius:0}}>
-        <CameraFrame videoRef={cam.videoRef} voiceOnly={cam.voiceOnly} streamRef={cam.streamRef} className="w-full h-full" status="recording"
+        <CameraFrame videoRef={cam.videoRef} voiceOnly={cam.voiceOnly} streamRef={cam.streamRef} cam={cam} className="w-full h-full" status="recording"
           overlay={
             <>
               {/* 顶部 HUD：REC + 时长 + 美颜 */}
@@ -8147,7 +8572,7 @@ const HostMode = () => {
     const currentQ = turns.length && turns[turns.length-1].role === 'host' ? turns[turns.length-1].text : '';
     return (
       <div className="absolute inset-0 z-[70] bg-stone-950 fade-in" style={{borderRadius:0}}>
-        <CameraFrame videoRef={cam.videoRef} voiceOnly={cam.voiceOnly} streamRef={cam.streamRef} className="w-full h-full" status="recording"
+        <CameraFrame videoRef={cam.videoRef} voiceOnly={cam.voiceOnly} streamRef={cam.streamRef} cam={cam} className="w-full h-full" status="recording"
           overlay={
             <>
               {/* 顶部 HUD */}
@@ -8469,12 +8894,12 @@ const TutorialMode = () => {
   }
   if (!currentStep && selected.steps.length) currentStep = selected.steps[selected.steps.length-1];
 
-  if (stage === 'preroll') return <ReadyOverlay countdown={preCount} videoRef={cam.videoRef} voiceOnly={cam.voiceOnly} hint={`框架：${selected.name} · 话题：${practiceTopic}`} />;
+  if (stage === 'preroll') return <ReadyOverlay countdown={preCount} cam={cam} hint={`框架：${selected.name} · 话题：${practiceTopic}`} />;
 
   if (stage === 'practice') {
     return (
       <div className="absolute inset-0 z-[70] bg-stone-950 fade-in" style={{borderRadius:0}}>
-        <CameraFrame videoRef={cam.videoRef} voiceOnly={cam.voiceOnly} streamRef={cam.streamRef} className="w-full h-full" status="recording"
+        <CameraFrame videoRef={cam.videoRef} voiceOnly={cam.voiceOnly} streamRef={cam.streamRef} cam={cam} className="w-full h-full" status="recording"
           overlay={
             <>
               {/* 进度条 + 阶段切片 (top) */}
@@ -8935,7 +9360,7 @@ const EndlessMode = () => {
     const presetHint = activePreset
       ? `${activePreset.emoji} ${activePreset.name} · 每 ${effectiveInterval}s 自动换题${activePreset.tip ? ' · ' + activePreset.tip : ''}`
       : `无限模式 · 每 ${effectiveInterval}s 自动换题`;
-    return <ReadyOverlay countdown={preCount} videoRef={cam.videoRef} voiceOnly={cam.voiceOnly} hint={presetHint} />;
+    return <ReadyOverlay countdown={preCount} cam={cam} hint={presetHint} />;
   }
 
   if (stage === 'running') {
@@ -8956,7 +9381,7 @@ const EndlessMode = () => {
     const activePreset = activePresetId ? SESSION_PRESETS.find(p => p.id === activePresetId) : null;
     return (
       <div className="absolute inset-0 z-[70] bg-stone-950" style={{borderRadius:0}}>
-        <CameraFrame videoRef={cam.videoRef} voiceOnly={cam.voiceOnly} streamRef={cam.streamRef} className="w-full h-full" status="recording"
+        <CameraFrame videoRef={cam.videoRef} voiceOnly={cam.voiceOnly} streamRef={cam.streamRef} cam={cam} className="w-full h-full" status="recording"
           overlay={
             <>
               {/* 顶部双条进度：上=本题（深红）下=总训练（琥珀）*/}
