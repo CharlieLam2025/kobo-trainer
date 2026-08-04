@@ -6,8 +6,8 @@ const sw = readFileSync(resolve(root, 'sw.js'), 'utf8');
 
 const checks = [
   {
-    ok: /const CACHE = ['"]kobo-trainer-v6['"]/.test(sw),
-    message: 'sw.js should bump CACHE to kobo-trainer-v6 so old cached bundles are evicted.',
+    ok: /const CACHE = ['"]kobo-trainer-v(\d+)['"]/.test(sw) && parseInt(sw.match(/kobo-trainer-v(\d+)/)[1], 10) >= 7,
+    message: 'sw.js should bump CACHE to kobo-trainer-v7+ so old cached bundles are evicted.',
   },
   {
     ok: sw.includes('NETWORK_FIRST_ASSETS') && sw.includes("'bundle.js'") && sw.includes("'styles.css'"),

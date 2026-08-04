@@ -1,8 +1,6 @@
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { readAllSource } from './read-sources.mjs';
 
-const root = resolve(import.meta.dirname, '..');
-const source = readFileSync(resolve(root, 'src/app.jsx'), 'utf8');
+const source = readAllSource();
 
 const requiredMarkers = [
   'const RecordingModeChooser',

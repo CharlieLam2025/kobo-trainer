@@ -1,9 +1,10 @@
 import { readFileSync, existsSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { resolve, relative } from 'node:path';
+import { listSourceFiles, projectRoot } from './read-sources.mjs';
 
-const root = resolve(import.meta.dirname, '..');
+const root = projectRoot;
 const files = [
-  'src/app.jsx',
+  ...listSourceFiles().map(p => relative(root, p)),
   'bundle.js',
   'index.html',
 ].filter(file => existsSync(resolve(root, file)));

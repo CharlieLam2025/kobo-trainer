@@ -1,7 +1,11 @@
 // 口播练习器 service worker
+// v9: 首页信息架构精简 + 质感动效体系
+// v8: 相机管线 30fps + 录制码率优化后的 bundle 换代
+// v7: 安装/更新时绕过 HTTP 缓存拉最新资源（cache:'reload'）·
+//     否则「新版本已就绪」提示后 · 新 cache 里装的可能还是浏览器 HTTP 缓存里的旧 bundle
 // v5: fallback 按请求类型分流 · 不再把 index.html 喂给 JS / CSS 解析器
 // 策略：app shell + vendor + bundle 都走 cache-first；其它走 network-first
-const CACHE = 'kobo-trainer-v6';
+const CACHE = 'kobo-trainer-v9';
 const NETWORK_FIRST_ASSETS = new Set(['bundle.js', 'styles.css']);
 const APP_SHELL = [
   './',
@@ -28,7 +32,10 @@ const APP_SHELL = [
 
 self.addEventListener('install', (e) => {
   e.waitUntil(
-    caches.open(CACHE).then(c => c.addAll(APP_SHELL)).then(() => self.skipWaiting())
+    caches.open(CACHE)
+      // cache:'reload' 绕过 HTTP 缓存 · 保证新版本 cache 里装的确实是服务器上的最新文件
+      .then(c => c.addAll(APP_SHELL.map(u => new Request(u, { cache: 'reload' }))))
+      .then(() => self.skipWaiting())
   );
 });
 
@@ -52,7 +59,14 @@ self.addEventListener('fetch', (e) => {
   if (url.origin === self.location.origin) {
     if (e.request.mode === 'navigate' || NETWORK_FIRST_ASSETS.has(url.pathname.split('/').pop())) {
       e.respondWith(
-        fetch(e.request).then(r => {
+        // no-cache：跟服务器做条件校验 · 不吃浏览器 HTTP 缓存里的旧 bundle
+        // navigate 请求不能 new Request(req, init) 重造 —— Chrome 会抛
+        // "Cannot construct a Request with a Request whose mode is 'navigate'"
+        // → respondWith 整个失效 · 浏览器走默认 HTTP 缓存 · 更新照样拿不到 → 用 URL 重发
+        fetch(e.request.mode === 'navigate'
+          ? new Request(e.request.url, { cache: 'no-cache' })
+          : new Request(e.request, { cache: 'no-cache' })
+        ).then(r => {
           if (r.ok && r.type === 'basic') {
             const clone = r.clone();
             caches.open(CACHE).then(c => c.put(e.request, clone));

@@ -1,6 +1,6 @@
 // 口播练习器 · 构建脚本
 // 并行产出两个产物：
-//   bundle.js  — esbuild 预编译 src/app.jsx（11400 行 JSX → IIFE）
+//   bundle.js  — esbuild 预编译 src/app.jsx 入口（已模块化：data/ lib/ hooks/ components/ modes/）→ IIFE
 //   styles.css — Tailwind v3 CLI 扫描实际用到的 class，仅生成必需的 CSS
 import * as esbuild from 'esbuild';
 import { execSync, spawn } from 'node:child_process';

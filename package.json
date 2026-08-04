@@ -17,6 +17,8 @@
     "verify:service-worker": "node scripts/verify-service-worker-update.mjs",
     "verify:personalized-practice": "node scripts/verify-personalized-practice.mjs",
     "verify:camera-experience": "node scripts/verify-camera-experience.mjs",
+    "verify:android": "node scripts/verify-android-package.mjs",
+    "verify": "node scripts/verify-all.mjs",
     "watch": "node build.mjs --watch"
   },
   "devDependencies": {

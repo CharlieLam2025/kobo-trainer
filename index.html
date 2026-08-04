@@ -76,22 +76,31 @@
   }
 </script>
 <!-- React + ReactDOM · 本地化（vendor/）· 已不再需要 Babel：JSX 在构建阶段就编译成 bundle.js -->
-<script src="vendor/react.production.min.js"></script>
-<script src="vendor/react-dom.production.min.js"></script>
-<!-- MediaPipe Face Landmarker（懒加载：用户开启美颜面部 FX 时才真正初始化）-->
-<script type="module">
-  // 预解析 ESM 模块，挂到全局；若网络/沙箱拦截则静默失败，cam 退回纯 CSS 滤镜路径
-  try {
-    const mod = await import('./mediapipe/vision_bundle.mjs');
-    window.__MEDIAPIPE = {
-      FilesetResolver: mod.FilesetResolver,
-      FaceLandmarker:  mod.FaceLandmarker,
-      ImageSegmenter:  mod.ImageSegmenter,
-    };
-    window.dispatchEvent(new Event('mediapipe-ready'));
-  } catch (e) {
-    console.warn('[MediaPipe] failed to load:', e?.message || e);
-  }
+<!-- defer：不阻塞 HTML 解析 · boot 画面立即可见 · defer 脚本按文档顺序执行（react → react-dom → bundle）-->
+<script defer src="vendor/react.production.min.js"></script>
+<script defer src="vendor/react-dom.production.min.js"></script>
+<!-- MediaPipe Face Landmarker（真懒加载：开美颜面部 FX 时才 import 137KB ESM · 冷启动不下载不解析）-->
+<script>
+  // use-camera 在 ensureLandmarker/ensureSegmenter 里调这个 loader；
+  // 若网络/沙箱拦截则静默失败，cam 退回纯 CSS 滤镜路径
+  window.__loadMediaPipe = function() {
+    if (window.__MEDIAPIPE) return Promise.resolve(window.__MEDIAPIPE);
+    if (window.__MEDIAPIPE_LOADING) return window.__MEDIAPIPE_LOADING;
+    window.__MEDIAPIPE_LOADING = import('./mediapipe/vision_bundle.mjs').then(function(mod) {
+      window.__MEDIAPIPE = {
+        FilesetResolver: mod.FilesetResolver,
+        FaceLandmarker:  mod.FaceLandmarker,
+        ImageSegmenter:  mod.ImageSegmenter,
+      };
+      window.dispatchEvent(new Event('mediapipe-ready'));
+      return window.__MEDIAPIPE;
+    }).catch(function(e) {
+      console.warn('[MediaPipe] failed to load:', (e && e.message) || e);
+      window.__MEDIAPIPE_LOADING = null; // 失败后允许重试（比如网络恢复）
+      return null;
+    });
+    return window.__MEDIAPIPE_LOADING;
+  };
 </script>
 <style>
   /* ─── Yandex Sans (the RANEPA brand face) ─────────────────────── */
@@ -245,14 +254,31 @@
 
   .no-scrollbar::-webkit-scrollbar { display: none; }
   .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
-  .fade-in { animation: fadeIn .25s ease-out; }
-  @keyframes fadeIn { from { opacity: 0; transform: translateY(4px) } to { opacity: 1; transform: translateY(0) } }
-  .pulse-rec { animation: pulseRec 1.4s ease-in-out infinite; }
-  @keyframes pulseRec { 0%, 100% { opacity: 1 } 50% { opacity: 0.35 } }
+
+  /* 兼容旧 class · 对齐新 motion 曲线 */
+  .fade-in { animation: fadeIn .4s cubic-bezier(0.32, 0.72, 0, 1) both; }
+  @keyframes fadeIn {
+    from { opacity: 0; transform: translateY(10px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+  .pulse-rec { animation: pulseRec 1.4s cubic-bezier(0.45, 0, 0.55, 1) infinite; }
+  @keyframes pulseRec {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50%      { opacity: 0.4; transform: scale(0.92); }
+  }
   @keyframes heartFloat {
     0%   { opacity: 0; transform: translateY(0) scale(0.5) rotate(-5deg); }
     15%  { opacity: 1; transform: translateY(-20px) scale(1.1) rotate(0deg); }
     100% { opacity: 0; transform: translateY(-260px) scale(0.8) rotate(8deg); }
+  }
+
+  /* 倒计时数字更有重量感 */
+  .kobo-countdown {
+    animation: koboCountdownIn 0.45s cubic-bezier(0.34, 1.15, 0.64, 1) both;
+  }
+  @keyframes koboCountdownIn {
+    from { opacity: 0; transform: scale(0.72); }
+    to   { opacity: 1; transform: scale(1); }
   }
 
   /* default tailwind "rounded-xl/2xl" sneak-in: make sure stand-alone radii
@@ -296,7 +322,7 @@
     }
   }, 8000);
 </script>
-<script src="bundle.js"></script>
+<script defer src="bundle.js"></script>
 <script>
   // PWA: 注册 service worker · 带「新版本就绪」提醒机制
   // sw.js install 时 skipWaiting + activate 时 claim · 所以新 SW 接管页面就是「有更新」

@@ -63,8 +63,10 @@ if (existsSync(join(root, 'index.html'))) {
   }
 }
 
-if (existsSync(join(root, 'src/app.jsx'))) {
-  const app = readFileSync(join(root, 'src/app.jsx'), 'utf8');
+// 模块化后 native bridge 分布在 native.jsx / storage.jsx 等 · 扫描整棵 src/
+if (existsSync(join(root, 'src'))) {
+  const { readAllSource } = await import('./read-sources.mjs');
+  const source = readAllSource(root);
   for (const needle of [
     '@capacitor/filesystem',
     '@capacitor/local-notifications',
@@ -73,7 +75,10 @@ if (existsSync(join(root, 'src/app.jsx'))) {
     'Filesystem.writeFile',
     'Directory.Documents',
   ]) {
-    if (!app.includes(needle)) fail(`src/app.jsx missing native bridge marker: ${needle}`);
+    if (!source.includes(needle)) fail(`src missing native bridge marker: ${needle}`);
+  }
+  if (!existsSync(join(root, 'src/native.jsx'))) {
+    fail('src/native.jsx missing (Capacitor bridge entry)');
   }
 }
 

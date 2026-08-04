@@ -1,7 +1,105 @@
 /* 口播练习器 · CSS 入口
- * 由 Tailwind CLI 扫描 src/app.jsx + index.html 实际用到的 class
+ * 由 Tailwind CLI 扫描 src/** + index.html 实际用到的 class
  * 编译产物：styles.css（部署时引用）
  */
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/* ── Motion system · only transform/opacity ── */
+@layer utilities {
+  .kobo-ease {
+    transition-timing-function: cubic-bezier(0.32, 0.72, 0, 1);
+  }
+}
+
+@layer components {
+  /* 页面进场：错峰上浮 */
+  .kobo-page {
+    animation: koboPageIn 0.45s cubic-bezier(0.32, 0.72, 0, 1) both;
+  }
+  .kobo-rise {
+    animation: koboRise 0.55s cubic-bezier(0.32, 0.72, 0, 1) both;
+  }
+  .kobo-pop {
+    animation: koboPop 0.5s cubic-bezier(0.34, 1.2, 0.64, 1) both;
+  }
+  .kobo-scrim {
+    animation: koboFade 0.35s cubic-bezier(0.32, 0.72, 0, 1) both;
+  }
+
+  /* 触感按压：scale，不用 top/left */
+  .kobo-press {
+    transition: transform 0.28s cubic-bezier(0.32, 0.72, 0, 1),
+                background-color 0.28s cubic-bezier(0.32, 0.72, 0, 1),
+                border-color 0.28s cubic-bezier(0.32, 0.72, 0, 1),
+                color 0.28s cubic-bezier(0.32, 0.72, 0, 1),
+                box-shadow 0.28s cubic-bezier(0.32, 0.72, 0, 1),
+                opacity 0.28s cubic-bezier(0.32, 0.72, 0, 1);
+    will-change: transform;
+  }
+  .kobo-press:active:not(:disabled) {
+    transform: scale(0.97);
+  }
+  @media (hover: hover) {
+    .kobo-press:hover:not(:disabled) {
+      transform: translateY(-1px);
+    }
+    .kobo-press:active:not(:disabled) {
+      transform: scale(0.97);
+    }
+  }
+
+  /* 卡片表面：轻阴影 + 悬停抬升（仅 hover 设备） */
+  .kobo-surface {
+    transition: box-shadow 0.4s cubic-bezier(0.32, 0.72, 0, 1),
+                border-color 0.4s cubic-bezier(0.32, 0.72, 0, 1),
+                transform 0.4s cubic-bezier(0.32, 0.72, 0, 1);
+  }
+  @media (hover: hover) {
+    .kobo-tile {
+      transition: transform 0.35s cubic-bezier(0.32, 0.72, 0, 1),
+                  border-color 0.35s cubic-bezier(0.32, 0.72, 0, 1),
+                  box-shadow 0.35s cubic-bezier(0.32, 0.72, 0, 1),
+                  background-color 0.35s cubic-bezier(0.32, 0.72, 0, 1);
+    }
+    .kobo-tile:hover {
+      transform: translateY(-2px);
+      border-color: rgba(163, 2, 54, 0.35);
+      box-shadow: 0 8px 24px rgba(38, 38, 38, 0.06);
+    }
+  }
+
+  /* 进度条宽度动画 */
+  .kobo-bar {
+    transition: width 0.7s cubic-bezier(0.32, 0.72, 0, 1);
+  }
+}
+
+@keyframes koboPageIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+@keyframes koboRise {
+  from { opacity: 0; transform: translateY(12px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes koboPop {
+  from { opacity: 0; transform: scale(0.92); }
+  to   { opacity: 1; transform: scale(1); }
+}
+@keyframes koboFade {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+/* 尊重系统「减少动态」 */
+@media (prefers-reduced-motion: reduce) {
+  .kobo-page, .kobo-rise, .kobo-pop, .kobo-scrim,
+  .fade-in, .pulse-rec {
+    animation: none !important;
+  }
+  .kobo-press, .kobo-tile, .kobo-surface, .kobo-bar {
+    transition: none !important;
+  }
+}

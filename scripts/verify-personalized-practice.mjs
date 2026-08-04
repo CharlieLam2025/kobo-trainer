@@ -26,7 +26,8 @@ const pool = buildAdaptiveTopicPool(['A', 'B'], interested, topic => topic === '
 assert.ok(pool.filter(topic => topic === 'A').length > pool.filter(topic => topic === 'B').length);
 assert.ok(!buildAdaptiveTopicPool(['A', 'B'], hidden).includes('B'));
 
-const app = readFileSync(resolve(root, 'src/app.jsx'), 'utf8');
+const { readAllSource } = await import('./read-sources.mjs');
+const app = readAllSource();
 for (const marker of [
   'TopicPreferenceControls',
   '我的收藏',
@@ -35,7 +36,7 @@ for (const marker of [
   'buildNextTakeFocus',
   'data-testid="recording-stop"',
 ]) {
-  assert.ok(app.includes(marker), `src/app.jsx missing personalized practice marker: ${marker}`);
+  assert.ok(app.includes(marker), `src missing personalized practice marker: ${marker}`);
 }
 
 console.log('Personalized topic and second-take experience verified.');
