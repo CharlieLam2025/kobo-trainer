@@ -1,11 +1,12 @@
 // 口播练习器 service worker
+// v10: 即兴一屏 + 复盘极简 · 字体预缓存瘦身（其余 font-display:swap 按需）
 // v9: 首页信息架构精简 + 质感动效体系
 // v8: 相机管线 30fps + 录制码率优化后的 bundle 换代
 // v7: 安装/更新时绕过 HTTP 缓存拉最新资源（cache:'reload'）·
 //     否则「新版本已就绪」提示后 · 新 cache 里装的可能还是浏览器 HTTP 缓存里的旧 bundle
 // v5: fallback 按请求类型分流 · 不再把 index.html 喂给 JS / CSS 解析器
 // 策略：app shell + vendor + bundle 都走 cache-first；其它走 network-first
-const CACHE = 'kobo-trainer-v9';
+const CACHE = 'kobo-trainer-v10';
 const NETWORK_FIRST_ASSETS = new Set(['bundle.js', 'styles.css']);
 const APP_SHELL = [
   './',
@@ -17,14 +18,11 @@ const APP_SHELL = [
   // 预编译产物：JS 走 esbuild · CSS 走 Tailwind CLI（仅含实际用到的 class）
   './bundle.js',
   './styles.css',
-  // 字体
+  // 字体：只预缓存最常用 Regular/Bold · Light/Medium 首次用时再拉
   './fonts/YandexSansDisplay-Bold.woff2',
   './fonts/YandexSansDisplay-Regular.woff2',
-  './fonts/YandexSansDisplay-Light.woff2',
   './fonts/YandexSansText-Bold.woff2',
-  './fonts/YandexSansText-Medium.woff2',
   './fonts/YandexSansText-Regular.woff2',
-  './fonts/YandexSansText-Light.woff2',
   // 图标
   './icons/icon-192.png',
   './icons/icon-512.png',

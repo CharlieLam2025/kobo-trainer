@@ -17,6 +17,7 @@ const dirs = [
   'fonts',
   'icons',
   'mediapipe',
+  'chunks', // esbuild 模式懒加载分包
 ];
 
 rmSync(outDir, { recursive: true, force: true });
@@ -30,7 +31,10 @@ for (const file of files) {
 
 for (const dir of dirs) {
   const from = join(root, dir);
-  if (!existsSync(from)) continue;
+  if (!existsSync(from)) {
+    if (dir === 'chunks') continue; // 允许空（旧构建）
+    continue;
+  }
   cpSync(from, join(outDir, dir), { recursive: true });
 }
 

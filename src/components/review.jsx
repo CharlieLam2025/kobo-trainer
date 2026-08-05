@@ -212,21 +212,25 @@ export const ReviewScoreGrid = ({ stats, review }) => {
 };
 
 export const ReviewHero = ({ contextLabel, duration, onRetry, onNew, focus }) => (
-  <ActionPanel className="p-5 mb-4 border-l-[3px] border-l-[#A30236]">
-    <div className="text-[10px] font-bold uppercase text-[#A30236] mb-2 tracking-[0.16em]">复盘报告</div>
-    <h1 className="font-display font-bold text-[24px] leading-tight text-stone-950">
-      保留一个优点，下一轮只改一件事。
+  <ActionPanel className="kobo-rise p-4 mb-3 border-l-[3px] border-l-[#A30236]">
+    <div className="text-[10px] font-bold uppercase text-[#A30236] mb-1.5 tracking-[0.16em]">复盘报告</div>
+    <h1 className="font-display font-bold text-[20px] leading-tight text-stone-950 m-0">
+      下一遍只改这一件事
     </h1>
-    <p className="text-[13px] text-stone-500 mt-2 leading-relaxed">
+    <p className="text-[12px] text-stone-500 mt-1.5 leading-relaxed truncate">
       {contextLabel || '未命名练习'} · {formatTime(duration || 0)}
     </p>
-    <div className="mt-4 p-3 bg-[#FBEFF2] border border-[#efd0da]" style={{borderRadius:'3px'}}>
-      <div className="text-[9px] tracking-[0.18em] uppercase font-bold text-[#A30236] mb-1">下一遍只改这一件事</div>
-      <div className="text-[13px] font-bold text-stone-900 leading-relaxed">{focus}</div>
-    </div>
-    <div className="flex gap-2 mt-4">
-      <Btn variant="primary" onClick={onRetry} className="flex-1"><Icon name="refresh" size={14}/> 同题二刷</Btn>
-      <Btn variant="secondary" onClick={onNew}>换个题目</Btn>
+    {focus && (
+      <div className="mt-3 p-3 bg-[#FBEFF2] border border-[#efd0da]" style={{ borderRadius: '8px' }}>
+        <div className="text-[9px] tracking-[0.18em] uppercase font-bold text-[#A30236] mb-1">下一遍只改这一件事</div>
+        <div className="text-[13px] font-bold text-stone-900 leading-relaxed">{focus}</div>
+      </div>
+    )}
+    <div className="flex gap-2 mt-3">
+      <Btn variant="primary" onClick={onRetry} className="flex-1 kobo-press">
+        <Icon name="refresh" size={14} /> 同题二刷
+      </Btn>
+      <Btn variant="secondary" onClick={onNew} className="kobo-press">换个题目</Btn>
     </div>
   </ActionPanel>
 );
@@ -246,6 +250,8 @@ export const DoneView = ({ blob, contextLabel, duration = 0, onRetry, onNew, ext
   const settings = useSettings();
   const [saveStatus, setSaveStatus] = useState({ state: 'pending' });
   const savedRef = useRef(false);
+  // 默认极简：AI / 同题对比 / 模拟发布 / 明天预订 收进「更多」
+  const [showMore, setShowMore] = useState(false);
 
   useEffect(() => {
     if (!blob || savedRef.current) return;
@@ -334,110 +340,86 @@ export const DoneView = ({ blob, contextLabel, duration = 0, onRetry, onNew, ext
     // eslint-disable-next-line
   }, [feedbackStats.newlyUnlocked.length]);
 
-  return (
-    <div className="fade-in">
-      {/* 习惯科学小奖 · 三态：
-            1. 前 7 天每天首次录像（softStreak 1-7，无 break）→ STREAK_DAY_MESSAGES
-            2. 断了 1-7 天回来（returnGap >= 2 且 <= 7，softStreak === 1）→ recovery 「never miss twice」
-            3. 断了 8+ 天回来 → recovery 「久违的 Day 1」
-      */}
-      {blob && feedbackStats.isFirstOfDay && (() => {
-        const { softStreak, returnGap } = feedbackStats;
-        let m = null;
-        let eyebrowLabel = `DAY ${softStreak} · 习惯科学`;
-        if (softStreak === 1 && returnGap !== null && returnGap >= 2) {
-          // 断了至少一天回来 · 用 recovery 文案
-          if (returnGap === 2) {
-            m = { emoji:'🤝', color:'#F1A23F',
-                  title:'昨天空了 · 今天又开始了 · 这就够',
-                  body:'习惯学有一条「never miss twice」规则 · 你今天做到了 · 比那些「等明天再说」的人强。' };
-            eyebrowLabel = 'STREAK REPAIR · 昨天空了一天';
-          } else if (returnGap <= 7) {
-            m = { emoji:'🌱', color:'#10b981',
-                  title:'回来了 · 这次的 Day 1 比上次的更有意义',
-                  body:`${returnGap - 1} 天没录 · 不算很久。断过的人才更知道这个习惯有多脆 · 现在重新走。` };
-            eyebrowLabel = `RESTART · 跳过了 ${returnGap - 1} 天`;
-          } else {
-            m = { emoji:'🌅', color:'#A30236',
-                  title:'好久没见 · 重新开始',
-                  body:`${returnGap} 天前你录过 · 那条还在你手机里。今天再录一条 · 重新走 Day 1。` };
-            eyebrowLabel = '回归 · 久违的 Day 1';
-          }
-        } else if (softStreak >= 1 && softStreak <= 7) {
-          m = STREAK_DAY_MESSAGES[softStreak] || null;
-        }
-        if (!m) return null;
-        return (
-          <Card className="mb-4 p-4 bg-stone-50 border-l-[3px]" style={{borderLeftColor: m.color}}>
-            <div className="flex items-start gap-3">
-              <div className="text-[32px] leading-none shrink-0">{m.emoji}</div>
-              <div className="flex-1 min-w-0">
-                <div className="text-stone-400 text-[9px] tracking-[0.18em] uppercase font-bold mb-1">
-                  {eyebrowLabel}
-                </div>
-                <div className="font-display font-bold text-stone-900 text-[15px] leading-snug">
-                  {m.title}
-                </div>
-                <p className="text-[12px] text-stone-600 mt-1.5 leading-relaxed">
-                  {m.body}
-                </p>
-              </div>
-            </div>
-          </Card>
-        );
-      })()}
+  // 首日/回归一句话（折叠成长科学长文）
+  const habitLine = useMemo(() => {
+    if (!blob || !feedbackStats.isFirstOfDay) return null;
+    const { softStreak, returnGap } = feedbackStats;
+    if (softStreak === 1 && returnGap != null && returnGap >= 2) {
+      if (returnGap === 2) return { emoji: '🤝', text: '昨天空了 · 今天又开始 · 这就够' };
+      if (returnGap <= 7) return { emoji: '🌱', text: `回来了 · 跳过了 ${returnGap - 1} 天也不晚` };
+      return { emoji: '🌅', text: '好久没见 · 重新走 Day 1' };
+    }
+    if (softStreak >= 1 && softStreak <= 7) {
+      const m = STREAK_DAY_MESSAGES[softStreak];
+      if (m) return { emoji: m.emoji, text: m.title };
+    }
+    return null;
+  }, [blob, feedbackStats]);
 
-      {/* 即时反馈：+1 预演 + 进度 + 新成就 */}
+  return (
+    <div className="kobo-page">
+      {/* 主反馈条：打卡进度 + 连续 + 新徽章 */}
       {blob && (
-        <Card className="mb-4 overflow-hidden border-0" style={{background: feedbackStats.justHitGoal ? 'linear-gradient(135deg, #10b981 0%, #059669 100%)' : 'linear-gradient(135deg, #A30236 0%, #8E0230 100%)', color: '#fff'}}>
-          <div className="p-5">
-            <div className="flex items-baseline justify-between mb-3">
-              <div className="flex items-baseline gap-2">
-                <span className="text-[11px] tracking-[0.22em] uppercase font-bold text-white/80">
-                  {feedbackStats.justHitGoal ? '🎯 今日打卡完成' : '✓ 预演 +1'}
-                </span>
-                {feedbackStats.qualified
-                  ? <span className="text-[10px] tracking-wider text-white/60">已记入今日打卡</span>
-                  : <span className="text-[10px] tracking-wider text-white/60">这条 {duration || 0}s · 满 {Math.ceil(feedbackStats.minDur)}s 才计入打卡</span>}
-              </div>
+        <div
+          className="kobo-rise kobo-pop mb-3 overflow-hidden text-white"
+          style={{
+            borderRadius: '12px',
+            background: feedbackStats.justHitGoal
+              ? 'linear-gradient(135deg, #10b981 0%, #059669 100%)'
+              : 'linear-gradient(135deg, #A30236 0%, #8E0230 100%)',
+          }}
+        >
+          <div className="p-4">
+            <div className="flex items-center justify-between gap-2 mb-2">
+              <span className="text-[11px] tracking-[0.18em] uppercase font-bold text-white/85">
+                {feedbackStats.justHitGoal ? '今日打卡完成' : '预演 +1'}
+              </span>
               {feedbackStats.streak > 0 && (
-                <div className="text-[11px] text-white/90 font-bold">🔥 连续 {feedbackStats.streak} 天</div>
+                <span className="text-[11px] font-bold text-white/90">🔥 连续 {feedbackStats.streak} 天</span>
               )}
             </div>
-            <div className="font-display font-bold text-2xl leading-tight mb-3">
+            <div className="font-display font-bold text-[18px] leading-snug mb-2">
               {feedbackStats.justHitGoal
-                ? '今天的预演任务完成了 🎉'
+                ? '今天的目标达成了'
                 : feedbackStats.remaining > 0
                   ? `再来 ${feedbackStats.remaining} 条 · 达成今日目标`
-                  : '加油，今天已经在进步'}
+                  : '今天已经在进步'}
             </div>
-            {/* 今日进度条 */}
-            <div className="h-1.5 bg-white/20 mb-1.5" style={{borderRadius:'1px'}}>
-              <div className="h-full bg-white transition-all duration-700" style={{width: `${Math.min(100, (feedbackStats.todayCount/Math.max(1,feedbackStats.goalCount))*100)}%`}}/>
+            <div className="h-1.5 bg-white/20 mb-1.5 overflow-hidden" style={{ borderRadius: '99px' }}>
+              <div
+                className="kobo-bar h-full bg-white"
+                style={{ width: `${Math.min(100, (feedbackStats.todayCount / Math.max(1, feedbackStats.goalCount)) * 100)}%` }}
+              />
             </div>
-            <div className="text-[10px] text-white/70 tabular-nums">
-              今日 {feedbackStats.todayCount} / {feedbackStats.goalCount}
+            <div className="flex items-center justify-between text-[10px] text-white/75 tabular-nums">
+              <span>
+                今日 {feedbackStats.todayCount}/{feedbackStats.goalCount}
+                {!feedbackStats.qualified && ` · 本条需满 ${Math.ceil(feedbackStats.minDur)}s 才计入`}
+              </span>
+              {sizeMB && saveStatus.state === 'saved' && <span>已存本地 · {sizeMB}MB</span>}
+              {saveStatus.state === 'saving' && <span>保存中…</span>}
+              {saveStatus.state === 'error' && <span>保存失败</span>}
             </div>
-
-            {/* 新解锁徽章 */}
             {feedbackStats.newlyUnlocked.length > 0 && (
-              <div className="mt-4 pt-4 border-t border-white/20">
-                <div className="text-[10px] tracking-[0.22em] uppercase font-bold text-amber-200 mb-2">🎉 新解锁徽章</div>
-                <div className="flex gap-2 flex-wrap">
-                  {feedbackStats.newlyUnlocked.map(a => (
-                    <div key={a.id} className="bg-white/15 backdrop-blur px-3 py-2 flex items-center gap-2" style={{borderRadius:'3px'}}>
-                      <span className="text-xl">{a.emoji}</span>
-                      <div>
-                        <div className="text-[12px] font-bold leading-none">{a.name}</div>
-                        <div className="text-[9px] text-white/70 mt-0.5">{a.desc}</div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
+              <div className="mt-3 flex gap-2 flex-wrap">
+                {feedbackStats.newlyUnlocked.map(a => (
+                  <span
+                    key={a.id}
+                    className="inline-flex items-center gap-1.5 bg-white/15 px-2.5 py-1 text-[11px] font-bold"
+                    style={{ borderRadius: '999px' }}
+                  >
+                    {a.emoji} {a.name}
+                  </span>
+                ))}
+              </div>
+            )}
+            {habitLine && (
+              <div className="mt-3 pt-2.5 border-t border-white/15 text-[12px] text-white/90 leading-snug">
+                {habitLine.emoji} {habitLine.text}
               </div>
             )}
           </div>
-        </Card>
+        </div>
       )}
 
       <ReviewHero
@@ -448,91 +430,86 @@ export const DoneView = ({ blob, contextLabel, duration = 0, onRetry, onNew, ext
         focus={nextTakeFocus}
       />
 
-      <Card className="p-6 mb-4">
-
-        {/* 保存状态条 */}
-        {blob && (
-          <div className={`mb-4 px-4 py-3 rounded-xl text-sm flex items-center gap-3 ${
-            saveStatus.state === 'saved' ? 'bg-emerald-50 border border-emerald-200 text-emerald-900' :
-            saveStatus.state === 'error' ? 'bg-red-50 border border-red-200 text-red-900' :
-            'bg-stone-100 border border-stone-200 text-stone-700'
-          }`}>
-            {saveStatus.state === 'saving' && <><span className="w-2 h-2 rounded-full bg-amber-400 pulse-rec" />正在保存到本地...</>}
-            {saveStatus.state === 'saved' && (
-              <>
-                <span>✓</span>
-                <div className="flex-1">
-                  <div className="font-medium">已保存：{saveStatus.filename}</div>
-                  <div className="text-xs opacity-70 mt-0.5">
-                    {saveStatus.method === 'native' ? '已保存到安卓应用内文档'
-                      : saveStatus.method === 'folder' ? '写入到你选择的目录'
-                      : '已下载到浏览器默认下载文件夹'} · {sizeMB} MB
-                  </div>
-                </div>
-                <div className="flex flex-col items-end gap-0.5">
-                  {url && (
-                    <a href={url} download={saveStatus.filename} className="text-xs underline">再下载一次</a>
-                  )}
-                  <button onClick={() => {
-                    if (window.confirm(`删除这条录像？\n\n${contextLabel}\n${saveStatus.method === 'folder' || saveStatus.method === 'native' ? '保存的文件也会被删除。' : '只删除历史条目（系统下载夹的文件请手动删）。'}`)) {
-                      // 找到刚加进 savedFiles 的那条（filename 匹配）→ 删除
-                      const idx = settings.savedFiles.findIndex(f => f.filename === saveStatus.filename);
-                      if (idx >= 0) settings.removeSavedFile(idx);
-                      setSaveStatus({ state: 'discarded' });
-                    }
-                  }} className="text-xs text-emerald-900/70 hover:text-red-700 underline">🗑 丢掉这条</button>
-                </div>
-              </>
-            )}
-            {saveStatus.state === 'discarded' && (
-              <>
-                <span>—</span>
-                <div className="flex-1 italic">已删除这条录像</div>
-              </>
-            )}
-            {saveStatus.state === 'error' && <>
-              <Icon name="close" size={14} strokeWidth={2}/>
-              <div className="flex-1">保存失败：{saveStatus.error}</div>
-              {url && <a href={url} download={`口播-${Date.now()}.webm`} className="text-xs underline">手动下载</a>}
-            </>}
-          </div>
-        )}
-
+      {/* 回放 */}
+      <Card className="kobo-rise p-3 mb-3" style={{ borderRadius: '12px' }}>
         {url ? (
           (blob.type && blob.type.startsWith('audio/')) ? (
-            <div className="w-full rounded-xl bg-gradient-to-br from-stone-900 to-[#3a0716] p-6 flex flex-col items-center justify-center">
-              <div className="text-6xl mb-3">🎙️</div>
-              <div className="text-amber-300 text-[10px] tracking-[0.22em] uppercase font-bold mb-3">纯语音录制 · 仅音频</div>
+            <div className="w-full bg-gradient-to-br from-stone-900 to-[#3a0716] p-5 flex flex-col items-center justify-center" style={{ borderRadius: '8px' }}>
+              <div className="text-5xl mb-2">🎙️</div>
+              <div className="text-amber-300 text-[10px] tracking-[0.18em] uppercase font-bold mb-3">纯语音</div>
               <audio src={url} controls className="w-full max-w-md" />
             </div>
           ) : (
-            <video src={url} controls className="w-full rounded-xl bg-black" />
+            <video src={url} controls className="w-full bg-black" style={{ borderRadius: '8px' }} />
           )
         ) : (
-          <div className="text-stone-400 text-sm p-8 text-center">录制为空（可能时长太短或权限被拒）</div>
+          <div className="text-stone-400 text-sm p-6 text-center">录制为空（可能时长太短或权限被拒）</div>
         )}
 
-        {/* 给这条录像打标签：高光 / 待重录 / 已发布
-            从第 3 条开始显示：历史列表里有筛选 chips 和「我的高光」概念 ·
-            原来的 >=10 门槛导致新用户看得到筛选器却无从打标签 */}
+        {saveStatus.state === 'saved' && (
+          <div className="mt-2.5 flex items-center justify-between gap-2 text-[11px] text-stone-500">
+            <span className="truncate">✓ {saveStatus.filename}</span>
+            <div className="flex items-center gap-2 shrink-0">
+              {url && (
+                <a href={url} download={saveStatus.filename} className="underline hover:text-[#A30236]">再下载</a>
+              )}
+              <button
+                type="button"
+                onClick={() => {
+                  if (window.confirm(`删除这条录像？\n\n${contextLabel}`)) {
+                    const idx = settings.savedFiles.findIndex(f => f.filename === saveStatus.filename);
+                    if (idx >= 0) settings.removeSavedFile(idx);
+                    setSaveStatus({ state: 'discarded' });
+                  }
+                }}
+                className="underline hover:text-red-600"
+              >
+                丢掉
+              </button>
+            </div>
+          </div>
+        )}
+        {saveStatus.state === 'error' && (
+          <div className="mt-2 text-[11px] text-red-600 flex items-center justify-between gap-2">
+            <span>保存失败：{saveStatus.error}</span>
+            {url && <a href={url} download={`口播-${Date.now()}.webm`} className="underline">手动下载</a>}
+          </div>
+        )}
+        {saveStatus.state === 'discarded' && (
+          <div className="mt-2 text-[11px] text-stone-400 italic">已删除这条录像</div>
+        )}
+
         {saveStatus.state === 'saved' && saveStatus.filename && (settings.savedFiles?.length || 0) >= 3 && (
-          <FileTagger filename={saveStatus.filename} />
+          <div className="mt-2">
+            <FileTagger filename={saveStatus.filename} />
+          </div>
         )}
       </Card>
 
-      {/* 🎯 AI 教练复盘 */}
-      {blob && <CoachReview topic={contextLabel} durationSec={duration} initialTranscript={transcript} onRetry={onRetry} />}
-
-      {/* ↻ 同题对比：今天 vs 上次同题（如果之前练过这题） */}
-      {blob && contextLabel && (
-        <SameTopicCompare topic={contextLabel} currentTranscript={transcript} currentDuration={duration} />
+      {/* 更多工具：默认折叠 */}
+      {blob && (
+        <div className="mb-3">
+          <button
+            type="button"
+            onClick={() => setShowMore(v => !v)}
+            className="kobo-press w-full flex items-center justify-between px-3 py-2.5 border border-stone-200 bg-white text-[13px] font-semibold text-stone-700"
+            style={{ borderRadius: '10px' }}
+          >
+            <span>{showMore ? '收起更多' : '更多 · AI 复盘 / 同题对比 / 预订明天'}</span>
+            <Icon name="chevron" size={14} className={`text-stone-400 transition-transform duration-300 ${showMore ? 'rotate-90' : ''}`} />
+          </button>
+          {showMore && (
+            <div className="kobo-rise mt-3 space-y-0">
+              <CoachReview topic={contextLabel} durationSec={duration} initialTranscript={transcript} onRetry={onRetry} />
+              {contextLabel && (
+                <SameTopicCompare topic={contextLabel} currentTranscript={transcript} currentDuration={duration} />
+              )}
+              {contextLabel && <PublishStep contextLabel={contextLabel} />}
+              <TomorrowTopicCommit defaultTopic={contextLabel} />
+            </div>
+          )}
+        </div>
       )}
-
-      {/* 🚀 预演 → 发布链路 */}
-      {blob && contextLabel && <PublishStep contextLabel={contextLabel} />}
-
-      {/* ✉️ 给明天的自己预订一题（pre-commitment device） */}
-      {blob && <TomorrowTopicCommit defaultTopic={contextLabel} />}
 
       {extra}
     </div>

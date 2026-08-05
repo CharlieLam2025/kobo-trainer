@@ -7,14 +7,33 @@ import { MobileHeader, NAV_ITEMS, BottomTabs, PageHeader } from './components/ui
 import { SettingsPanel } from './components/settings-panel.jsx';
 import { Onboarding, UpdateBanner, VoiceUpgradePrompt } from './components/overlays.jsx';
 import { HomeView } from './modes/home.jsx';
-import { ImprovMode } from './modes/improv.jsx';
-import { TeleprompterMode } from './modes/teleprompter.jsx';
-import { HostMode } from './modes/host.jsx';
-import { TutorialMode } from './modes/tutorial.jsx';
-import { EndlessMode } from './modes/endless.jsx';
 import { useState, useEffect, useRef, useMemo, useCallback } from './react-hooks.jsx';
 import { normalizeTopicPreferences, updateTopicPreference } from './topic-preferences.mjs';
 import { lsGet, lsSet, lsGetJson, lsSetJson } from './lib/utils.jsx';
+
+// 模式懒加载：首屏只带首页 + shell · 点进模式再拉对应 chunk
+const ImprovMode = React.lazy(() =>
+  import('./modes/improv.jsx').then(m => ({ default: m.ImprovMode }))
+);
+const TeleprompterMode = React.lazy(() =>
+  import('./modes/teleprompter.jsx').then(m => ({ default: m.TeleprompterMode }))
+);
+const HostMode = React.lazy(() =>
+  import('./modes/host.jsx').then(m => ({ default: m.HostMode }))
+);
+const TutorialMode = React.lazy(() =>
+  import('./modes/tutorial.jsx').then(m => ({ default: m.TutorialMode }))
+);
+const EndlessMode = React.lazy(() =>
+  import('./modes/endless.jsx').then(m => ({ default: m.EndlessMode }))
+);
+
+const ModeFallback = () => (
+  <div className="kobo-rise py-16 text-center">
+    <div className="inline-block w-8 h-8 border-2 border-[#A30236] border-t-transparent rounded-full animate-spin mb-3" />
+    <div className="text-[13px] text-stone-500">加载练习模式…</div>
+  </div>
+);
 
 export function App() {
   const [mode, setMode] = useState('home');
@@ -315,11 +334,13 @@ export function App() {
                 if (!meta) return null;
                 return <PageHeader no={meta.no} iconName={meta.icon} title={meta.title} desc={meta.desc} />;
               })()}
-              {mode === 'improv'       && <ImprovMode key="improv" intent={improvIntent} clearIntent={clearImprovIntent} />}
-              {mode === 'endless'      && <EndlessMode key="endless" />}
-              {mode === 'teleprompter' && <TeleprompterMode key="tele" />}
-              {mode === 'host'         && <HostMode key="host" />}
-              {mode === 'tutorial'     && <TutorialMode key="tut" />}
+              <React.Suspense fallback={<ModeFallback />}>
+                {mode === 'improv'       && <ImprovMode key="improv" intent={improvIntent} clearIntent={clearImprovIntent} />}
+                {mode === 'endless'      && <EndlessMode key="endless" />}
+                {mode === 'teleprompter' && <TeleprompterMode key="tele" />}
+                {mode === 'host'         && <HostMode key="host" />}
+                {mode === 'tutorial'     && <TutorialMode key="tut" />}
+              </React.Suspense>
             </>
           )}
         </div>

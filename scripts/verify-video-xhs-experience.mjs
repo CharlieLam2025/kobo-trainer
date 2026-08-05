@@ -23,9 +23,10 @@ const forbiddenMarkers = [
 
 const leaked = forbiddenMarkers.filter(marker => source.includes(marker));
 
+// 即兴已合并为一屏主路径 · 录制方式选择器至少出现 1 次即可
 const chooserUsages = (source.match(/<RecordingModeChooser/g) || []).length;
-if (chooserUsages < 2) {
-  missing.push('RecordingModeChooser used in quick and full setup flows');
+if (chooserUsages < 1) {
+  missing.push('RecordingModeChooser used in improv setup flow');
 }
 
 const xhsMatch = source.match(/const XHS_HOT_TOPICS = \[([\s\S]*?)\];/);

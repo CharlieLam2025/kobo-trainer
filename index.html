@@ -322,7 +322,8 @@
     }
   }, 8000);
 </script>
-<script defer src="bundle.js"></script>
+<!-- ESM 入口 · 模式 chunk 按需加载（见 chunks/） -->
+<script type="module" src="bundle.js"></script>
 <script>
   // PWA: 注册 service worker · 带「新版本就绪」提醒机制
   // sw.js install 时 skipWaiting + activate 时 claim · 所以新 SW 接管页面就是「有更新」
